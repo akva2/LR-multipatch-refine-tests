@@ -23,6 +23,8 @@ target_link_libraries(TestMatchingKnots ${LRSpline_LIBRARIES} ${GoTools_LIBRARIE
 enable_testing()
 if(USE_MPI)
   add_test(2patch_flip+reverse ${MPIEXEC} ${MPIEXEC_NUMPROC_FLAG} 2 ${MPIEXEC_PREFLAGS} TestMatchingKnots ${MPIEXEC_POSTFLAGS} 1)
+  add_test(3patch_Lshape ${MPIEXEC} ${MPIEXEC_NUMPROC_FLAG} 3 ${MPIEXEC_PREFLAGS} TestMatchingKnots ${MPIEXEC_POSTFLAGS} 2)
 else()
   add_test(2patch_flip+reverse TestMatchingKnots 1)
+  add_test(3patch_Lshape TestMatchingKnots 2)
 endif()
