@@ -6,6 +6,10 @@
 #include "GoTools/geometry/SplineSurface.h"
 #include "GoTools/geometry/ObjectHeader.h"
 
+#ifdef HAVE_MPI
+#include <mpi.h>
+#endif
+
 using namespace std;
 using namespace LR;
 using namespace Go;
@@ -64,6 +68,52 @@ static bool check_isotropic_refinement(LRSplineSurface *lr) {
 
 // 2 patch, flip + reverse
 static int case1() {
+#ifdef USE_MPI
+  int rank;
+
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+  if (rank > 1)
+    return 0;
+
+  // create object
+  std::unique_ptr<LRSplineSurface> lr;
+  if (rank == 0) {
+    lr1.reset(new LRSplineSurface(5,5,4,4));
+    lr.refineElement(0);
+    lr.refineElement(4);
+    lr.refineElement(6);
+    lr.refineElement(4);
+    vector<double> knots = lr->getEdgeKnots(WEST, true);
+    cout << "Edge nodes on WEST side:\n";
+    for(auto d : knots)
+      cout << d << endl;
+    // manually reverse knots (0,1) -> (1,0)
+    for(auto& it : knots)
+      it = 1.0-it;
+    int size = knots.size();
+    MPI_Send(&size, 1, MPI_INT, 1, 1, MPI_COMM_WORLD);
+    MPI_Send(knots.data(), size, MP_DOUBLE, 1, 2, MPI_COMM_WORLD);
+    ofstream out("lr1.eps");
+    lr->writePostscriptMesh(out);
+    out.close();
+  } else {
+    lr.reset(new LRSplineSurface(5,5,4,4));
+    int size;
+    MPI_Recv(&size, 1, MPI_INT, 0, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    vector<double> knots(size);
+    MPI_Recv(knots.data(), size, MPI_DOUBLE, 0, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    lr->matchParametricEdge(NORTH, knots, true);
+    cout << *lr << std::endl;
+    auto new_knots = lr->getEdgeKnots(NORTH, true);
+    if (!check_orig_knots_is_subset(knots, new_knots))
+      return 1;
+    ofstream out("lr2.eps");
+    lr->writePostscriptMesh(out);
+    out.close();
+  }
+
+  return 0;
+#else
   // create objects
   LRSplineSurface lr1(5,5,4,4);
   LRSplineSurface lr2(5,5,4,4);
@@ -98,6 +148,7 @@ static int case1() {
   out2.close();
 
   return 0;
+#endif
 }
 
 // 3 patch, Lshape
@@ -142,10 +193,19 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  if (atoi(argv[1]) == 1)
-    return case1();
-  else if (atoi(argv[1]) == 2)
-    return case2();
+#ifdef HAVE_MPI
+  MPI_Init(&argc, &argv);
+#endif
 
-  return 1;
+  int result = 1;
+  if (atoi(argv[1]) == 1)
+    result = case1();
+  else if (atoi(argv[1]) == 2)
+    result = case2();
+
+#ifdef HAVE_MPI
+  MPI_Finalize();
+#endif
+
+  return result;
 } 
