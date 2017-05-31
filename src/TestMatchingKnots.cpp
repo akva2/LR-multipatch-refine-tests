@@ -59,7 +59,7 @@ static bool check_matching_knots(const std::vector<double>& knots1, const std::v
 
 // check that all elements continue to be perfect squares (isotropic / basis-function refinement)
 static bool check_isotropic_refinement(LRSplineSurface *lr) {
-  for(auto el : lr->getAllElements()) 
+  for(auto el : lr->getAllElements())
     if(fabs( (el->umax() - el->umin()) - (el->vmax() - el->vmin()) ) >1e-4)
       return false;
 
@@ -175,10 +175,10 @@ static int case2() {
   // check that it all worked well
   if(! check_matching_knots(lr[0]->getEdgeKnots(EAST, true),
                             lr[1]->getEdgeKnots(WEST, true)))
-    return 1;                           
+    return 1;
   if(! check_matching_knots(lr[1]->getEdgeKnots(SOUTH, true),
                             lr[2]->getEdgeKnots(NORTH, true)))
-    return 1;                           
+    return 1;
   for(auto l : lr)
     if(! check_isotropic_refinement(l) )
       return 1;
@@ -208,4 +208,4 @@ int main(int argc, char **argv) {
 #endif
 
   return result;
-} 
+}
