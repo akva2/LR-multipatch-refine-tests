@@ -15,6 +15,11 @@ using namespace std;
 using namespace LR;
 using namespace Go;
 
+typedef int  (*check_function)( const vector<LRSplineSurface*>&);
+typedef void (*refine_function)(      vector<LRSplineSurface*>&);
+typedef void (*fix_function)(         vector<LRSplineSurface*>&);
+typedef vector<LRSplineSurface*> (*geom_function)();
+
 // read multipatch g2 file and return LRSplineSurface representation of all patches
 vector<LRSplineSurface*> readFile(const string &filename) {
   vector<LRSplineSurface*> results;
@@ -50,6 +55,13 @@ bool writeFile(const string &filename, vector<LRSplineSurface*> model) {
     out << *lr << endl;
 }
 
+/***************** ASSERTION FUNCTIONS  ******************
+ *
+ * logical tests to see if the resulting multipatch model
+ * is indeed matching.
+ *
+ *********************************************************/
+
 // check that new knots contain all original knots (one-way matching)
 static bool check_orig_knots_is_subset(const std::vector<double>& knots, const std::vector<double>& new_knots) {
   for (auto& it : new_knots)
@@ -79,8 +91,15 @@ static bool check_isotropic_refinement(LRSplineSurface *lr) {
   return true;
 }
 
+/***************** REFINEMENT FUNCTIONS  *****************
+ *
+ * different refinement schemes that is used to test all
+ * geometries.
+ *
+ *********************************************************/
+
 // Refinement strategy 1: refine all 4 corners of the LAST patch
-static void refine1(vector<LRSplineSurface*> model) {
+static void refine1(vector<LRSplineSurface*>& model) {
   vector<Basisfunction*> oneFunction;
   vector<int> corner_idx;
   // fetch index of all 4 corners
@@ -97,10 +116,24 @@ static void refine1(vector<LRSplineSurface*> model) {
 }
 
 // Refinement strategy 2: randomly one function on all patches independently
-static void refine2(vector<LRSplineSurface*> model) {
+static void refine2(vector<LRSplineSurface*>& model) {
   for(size_t i=0; i<model.size(); ++i)
     model[i]->refineBasisFunction((13*i+17) % model[i]->nBasisFunctions());
 }
+
+/***************** Case 2: L-shape  **********************
+ *
+ * +--------+--------+
+ * |        |        |
+ * |    #1  |   #2   |
+ * |        |        |
+ * +--------+--------+
+ *          |        |
+ *          |   #3   |   <--- this guy is p=(3,2)
+ *          |        |
+ *          +--------+
+ *
+ *********************************************************/
 
 // Geometry 2: lshape
 static vector<LRSplineSurface*> geom2() {
@@ -121,7 +154,7 @@ static void fix2(vector<LRSplineSurface*> &lr) {
   lr[1]->matchParametricEdge(WEST, knots1, true);
 }
 
-static int check2(vector<LRSplineSurface*> &lr) {
+static int check2(const vector<LRSplineSurface*> &lr) {
   // check that it all worked well
   if(! check_matching_knots(lr[0]->getEdgeKnots(EAST, true),
                             lr[1]->getEdgeKnots(WEST, true)))
@@ -135,7 +168,24 @@ static int check2(vector<LRSplineSurface*> &lr) {
 }
 
 
-// Geometry 3: Star-shaped 6-patch geometry
+/***************** Case 3: Star  **************************
+ *          ^
+ *         / \
+ *        /   \
+ *  _____/ #2  \_____
+ *  \    \     /    /
+ *   \ #3 \   / #1 /
+ *    \____\ /____/
+ *    /    /`\    \
+ *   / #4 /   \ #6 \
+ *  /____/ #5  \____\
+ *       \     /
+ *        \   /
+ *         \ /
+ *          V
+ *
+ *********************************************************/
+
 static vector<LRSplineSurface*> geom3() {
   return readFile("../geometries/star.g2");
 }
@@ -163,6 +213,61 @@ static int check3(const vector<LRSplineSurface*> &lr) {
       return 1;
   }
 }
+
+/***************** Case 4: Self-loop   ********************
+ *
+ *           __________,
+ *          /           \
+ *         /             \.
+ *        /      .,       |
+ *       /      |  )      |
+ *       +------+-'       |
+ *       |      |   #2    |
+ *       |  #1  |        /`
+ *       |      |       /
+ *       +------+------'
+ *
+ *
+ *********************************************************/
+
+static vector<LRSplineSurface*> geom4() {
+  return readFile("../geometries/self-loop.g2");
+}
+
+static void fix4(vector<LRSplineSurface*> &lr) {
+  bool change = true;
+  while(change) {
+    change = false;
+    vector<double> knots1 = lr[0]->getEdgeKnots(EAST,  true);
+    vector<double> knots2 = lr[0]->getEdgeKnots(NORTH, true);
+    vector<double> knots3 = lr[1]->getEdgeKnots(WEST,  true);
+    vector<double> knots4 = lr[1]->getEdgeKnots(EAST,  true);
+    change |= lr[0]->matchParametricEdge(EAST,  knots3, true);
+    change |= lr[0]->matchParametricEdge(NORTH, knots4, true);
+    change |= lr[1]->matchParametricEdge(WEST,  knots1, true);
+    change |= lr[1]->matchParametricEdge(EAST,  knots2, true);
+  }
+}
+
+static int check4(const vector<LRSplineSurface*> &lr) {
+  if(! check_matching_knots(lr[0]->getEdgeKnots(EAST, true),
+                            lr[1]->getEdgeKnots(WEST, true)))
+    return 1;
+  if(! check_matching_knots(lr[0]->getEdgeKnots(NORTH, true),
+                            lr[1]->getEdgeKnots(EAST,  true)))
+    return 1;
+  if(! check_isotropic_refinement(lr[0]) ||
+     ! check_isotropic_refinement(lr[1]))
+    return 1;
+}
+
+
+/***************** Legacy code   **************************
+ *
+ * This is kept around so I see what the basic way on how to
+ * do the MPI calls.
+ *
+ **********************************************************/
 
 // 2 patch, flip + reverse
 static int case1() {
@@ -523,6 +628,12 @@ static int case3() {
   return 0;
 }
 
+/***************** Main method  ***************************
+ *
+ * The real program starts here....
+ *
+ **********************************************************/
+
 int main(int argc, char **argv) {
   if (argc < 4) {
     std::cerr << "File usage: " << argv[0] << "<geometry> <refinement> <iterations>" << std::endl;
@@ -545,33 +656,23 @@ int main(int argc, char **argv) {
   int geometry   = atoi(argv[1]);
   int refinement = atoi(argv[2]);
   int iterations = atoi(argv[3]);
-  if(geometry == 2)
-    model = geom2();
-  else if(geometry == 3)
-    model = geom3();
-  else
-    return 1;
+  geom_function   geom[]   = {nullptr, nullptr,  geom2,   geom3,  geom4};
+  check_function  check[]  = {nullptr, nullptr, check2,  check3, check4};
+  fix_function    fix[]    = {nullptr, nullptr,   fix2,    fix3,   fix4};
+  refine_function refine[] = {nullptr, refine1,refine2};
+
+  model = geom[geometry]();
 
   for(int i=0; i<iterations; i++) {
-    if(refinement == 1)
-      refine1(model);
-    else if(refinement == 2)
-      refine2(model);
+    refine[refinement](model);
+    fix[geometry](model);
 
-    if(geometry == 2)
-      fix2(model);
-    else if(geometry == 3)
-      fix3(model);
     for(auto lr : model) {
       lr->generateIDs();
     }
   }
 
-  int result = 1;
-  if(geometry == 2)
-    result = check2(model);
-  else if(geometry == 3)
-    result = check3(model);
+  int result = check[geometry](model);
 
   // print results to file for manual debugging
   writeFile("mesh.lr", model);
