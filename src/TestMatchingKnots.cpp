@@ -37,6 +37,13 @@ vector<LRSplineSurface*> readFile(const string &filename) {
   return results;
 }
 
+// write multipatch lr model to file for manual inspection
+bool writeFile(const string &filename, vector<LRSplineSurface*> model) {
+  ofstream out(filename);
+  for(auto lr : model)
+    out << *lr << endl;
+}
+
 // check that new knots contain all original knots (one-way matching)
 static bool check_orig_knots_is_subset(const std::vector<double>& knots, const std::vector<double>& new_knots) {
   for (auto& it : new_knots)
@@ -158,7 +165,7 @@ static int case2() {
   if (rank > 2)
     return 0;
 
-  vector<LRSplineSurface*> lr          = readFile("../geometries/lshape.g2");
+  vector<LRSplineSurface*> lr = readFile("../geometries/lshape.g2");
   if (rank == 0) {
     vector<Basisfunction*>   oneFunction;
     lr[0]->getEdgeFunctions( oneFunction, SOUTH_EAST );
@@ -227,7 +234,7 @@ static int case2() {
       return 1;
   }
 #else
-  vector<LRSplineSurface*> lr          = readFile("../geometries/lshape.g2");
+  vector<LRSplineSurface*> lr = readFile("../geometries/lshape.g2");
   vector<Basisfunction*>   oneFunction ;
   lr[0]->getEdgeFunctions( oneFunction, SOUTH_EAST );
 
@@ -258,6 +265,47 @@ static int case2() {
       return 1;
 #endif
 
+  // print results to file for manual debugging
+  writeFile("mesh.lr", lr);
+
+  return 0;
+}
+
+// 6 patch, star
+static int case3() {
+  vector<LRSplineSurface*> lr = readFile("../geometries/star.g2");
+  lr[0]->refineBasisFunction(3);
+  lr[1]->refineBasisFunction(4);
+  lr[2]->refineBasisFunction(5);
+  lr[3]->refineBasisFunction(6);
+  lr[4]->refineBasisFunction(7);
+  lr[5]->refineBasisFunction(8);
+
+  bool change = true;
+  while(change) {
+    change = false;
+    for(int i=0; i<6; ++i) {
+      int j = (i+1)%6;
+      vector<double> knots1 = lr[i]->getEdgeKnots(WEST,  true);
+      vector<double> knots2 = lr[j]->getEdgeKnots(SOUTH, true);
+      change |= lr[i]->matchParametricEdge(WEST,  knots2, true);
+      change |= lr[j]->matchParametricEdge(SOUTH, knots1, true);
+    }
+  }
+
+  // check that it all worked well
+  for(int i=0; i<6; ++i) {
+    int j = (i+1)%6;
+    if(! check_matching_knots(lr[i]->getEdgeKnots(WEST,  true),
+                              lr[j]->getEdgeKnots(SOUTH, true)))
+      return 1;
+    if(! check_isotropic_refinement(lr[i]))
+      return 1;
+  }
+
+  // print results to file for manual debugging
+  writeFile("mesh.lr", lr);
+
   return 0;
 }
 
@@ -265,6 +313,8 @@ int main(int argc, char **argv) {
   if (argc < 2) {
     std::cerr << "Need a parameter - the test to run" << std::endl;
     std::cerr << "1 = 2 patch, flip + reverse" << std::endl;
+    std::cerr << "2 = 3 patch, L-shape"        << std::endl;
+    std::cerr << "3 = 6 patch, Star"           << std::endl;
     return 1;
   }
 
@@ -277,6 +327,8 @@ int main(int argc, char **argv) {
     result = case1();
   else if (atoi(argv[1]) == 2)
     result = case2();
+  else if (atoi(argv[1]) == 3)
+    result = case3();
 
 #ifdef HAVE_MPI
   MPI_Finalize();

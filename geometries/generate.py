@@ -13,6 +13,9 @@ s1[1,1] = [2*np.cos(np.pi/6), 2*np.sin(np.pi/6)];
 star = [s1]
 for i in range(5):
     star.append(star[-1].clone().rotate(np.pi/3))
+for s in star:
+  s.raise_order(1,1)
+  s.refine(3,3)
 with G2("star.g2") as f:
     f.write(star)
 
