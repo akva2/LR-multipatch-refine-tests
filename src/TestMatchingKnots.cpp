@@ -79,6 +79,91 @@ static bool check_isotropic_refinement(LRSplineSurface *lr) {
   return true;
 }
 
+// Refinement strategy 1: refine all 4 corners of the LAST patch
+static void refine1(vector<LRSplineSurface*> model) {
+  vector<Basisfunction*> oneFunction;
+  vector<int> corner_idx;
+  // fetch index of all 4 corners
+  model.back()->getEdgeFunctions(oneFunction, SOUTH_WEST);
+  corner_idx.push_back(oneFunction[0]->getId());
+  model.back()->getEdgeFunctions(oneFunction, SOUTH_EAST);
+  corner_idx.push_back(oneFunction[0]->getId());
+  model.back()->getEdgeFunctions(oneFunction, NORTH_WEST);
+  corner_idx.push_back(oneFunction[0]->getId());
+  model.back()->getEdgeFunctions(oneFunction, NORTH_EAST);
+  corner_idx.push_back(oneFunction[0]->getId());
+  // do the actual refinement
+  model.back()->refineBasisFunction(corner_idx);
+}
+
+// Refinement strategy 2: randomly one function on all patches independently
+static void refine2(vector<LRSplineSurface*> model) {
+  for(size_t i=0; i<model.size(); ++i)
+    model[i]->refineBasisFunction((13*i+17) % model[i]->nBasisFunctions());
+}
+
+// Geometry 2: lshape
+static vector<LRSplineSurface*> geom2() {
+  return readFile("../geometries/lshape.g2");
+}
+
+static void fix2(vector<LRSplineSurface*> &lr) {
+  // match patch 1 to patch 2
+  vector<double> knots3 = lr[1]->getEdgeKnots(SOUTH, true);
+  vector<double> knots4 = lr[2]->getEdgeKnots(NORTH, true);
+  lr[1]->matchParametricEdge(SOUTH, knots4, true);
+  lr[2]->matchParametricEdge(NORTH, knots3, true);
+
+  // match patch 0 to patch 1
+  vector<double> knots1 = lr[0]->getEdgeKnots(EAST, true);
+  vector<double> knots2 = lr[1]->getEdgeKnots(WEST, true);
+  lr[0]->matchParametricEdge(EAST, knots2, true);
+  lr[1]->matchParametricEdge(WEST, knots1, true);
+}
+
+static int check2(vector<LRSplineSurface*> &lr) {
+  // check that it all worked well
+  if(! check_matching_knots(lr[0]->getEdgeKnots(EAST, true),
+                            lr[1]->getEdgeKnots(WEST, true)))
+    return 1;
+  if(! check_matching_knots(lr[1]->getEdgeKnots(SOUTH, true),
+                            lr[2]->getEdgeKnots(NORTH, true)))
+    return 1;
+  for(auto l : lr)
+    if(! check_isotropic_refinement(l) )
+      return 1;
+}
+
+
+// Geometry 3: Star-shaped 6-patch geometry
+static vector<LRSplineSurface*> geom3() {
+  return readFile("../geometries/star.g2");
+}
+
+static void fix3(vector<LRSplineSurface*> &lr) {
+  bool change = true;
+  while(change) {
+    change = false;
+    for(int i=0; i<6; ++i) {
+      int j = (i+1)%6;
+      vector<double> knots1 = lr[i]->getEdgeKnots(WEST,  true);
+      vector<double> knots2 = lr[j]->getEdgeKnots(SOUTH, true);
+      change |= lr[i]->matchParametricEdge(WEST,  knots2, true);
+      change |= lr[j]->matchParametricEdge(SOUTH, knots1, true);
+    }
+  }
+}
+static int check3(const vector<LRSplineSurface*> &lr) {
+  for(int i=0; i<6; ++i) {
+    int j = (i+1)%6;
+    if(! check_matching_knots(lr[i]->getEdgeKnots(WEST,  true),
+                              lr[j]->getEdgeKnots(SOUTH, true)))
+      return 1;
+    if(! check_isotropic_refinement(lr[i]))
+      return 1;
+  }
+}
+
 // 2 patch, flip + reverse
 static int case1() {
 #ifdef HAVE_MPI
@@ -439,11 +524,16 @@ static int case3() {
 }
 
 int main(int argc, char **argv) {
-  if (argc < 2) {
-    std::cerr << "Need a parameter - the test to run" << std::endl;
-    std::cerr << "1 = 2 patch, flip + reverse" << std::endl;
-    std::cerr << "2 = 3 patch, L-shape"        << std::endl;
-    std::cerr << "3 = 6 patch, Star"           << std::endl;
+  if (argc < 4) {
+    std::cerr << "File usage: " << argv[0] << "<geometry> <refinement> <iterations>" << std::endl;
+    std::cerr << "  geometry: " << std::endl;
+    std::cerr << "    2 = L-shape, 3 patches" << std::endl;
+    std::cerr << "    3 = Star, 6 patches" << std::endl;
+    std::cerr << "    4 = Self-loop, 2 patches" << std::endl;
+    std::cerr << "  refinement: " << std::endl;
+    std::cerr << "    1 = Corner refinement (all corners on last patch)" << std::endl;
+    std::cerr << "    2 = One random function on each patch (chosen independently)" << std::endl;
+    std::cerr << "  iterations: (int) number of refinement that is to be performed" << std::endl;
     return 1;
   }
 
@@ -451,13 +541,40 @@ int main(int argc, char **argv) {
   MPI_Init(&argc, &argv);
 #endif
 
+  vector<LRSplineSurface*> model;
+  int geometry   = atoi(argv[1]);
+  int refinement = atoi(argv[2]);
+  int iterations = atoi(argv[3]);
+  if(geometry == 2)
+    model = geom2();
+  else if(geometry == 3)
+    model = geom3();
+  else
+    return 1;
+
+  for(int i=0; i<iterations; i++) {
+    if(refinement == 1)
+      refine1(model);
+    else if(refinement == 2)
+      refine2(model);
+
+    if(geometry == 2)
+      fix2(model);
+    else if(geometry == 3)
+      fix3(model);
+    for(auto lr : model) {
+      lr->generateIDs();
+    }
+  }
+
   int result = 1;
-  if (atoi(argv[1]) == 1)
-    result = case1();
-  else if (atoi(argv[1]) == 2)
-    result = case2();
-  else if (atoi(argv[1]) == 3)
-    result = case3();
+  if(geometry == 2)
+    result = check2(model);
+  else if(geometry == 3)
+    result = check3(model);
+
+  // print results to file for manual debugging
+  writeFile("mesh.lr", model);
 
 #ifdef HAVE_MPI
   MPI_Finalize();
