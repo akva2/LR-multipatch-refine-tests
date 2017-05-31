@@ -75,7 +75,7 @@ static bool check_isotropic_refinement(LRSplineSurface *lr) {
 
 // 2 patch, flip + reverse
 static int case1() {
-#ifdef USE_MPI
+#ifdef HAVE_MPI
   int rank;
 
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
@@ -85,11 +85,11 @@ static int case1() {
   // create object
   std::unique_ptr<LRSplineSurface> lr;
   if (rank == 0) {
-    lr1.reset(new LRSplineSurface(5,5,4,4));
-    lr.refineElement(0);
-    lr.refineElement(4);
-    lr.refineElement(6);
-    lr.refineElement(4);
+    lr.reset(new LRSplineSurface(5,5,4,4));
+    lr->refineElement(0);
+    lr->refineElement(4);
+    lr->refineElement(6);
+    lr->refineElement(4);
     vector<double> knots = lr->getEdgeKnots(WEST, true);
     cout << "Edge nodes on WEST side:\n";
     for(auto d : knots)
@@ -99,7 +99,7 @@ static int case1() {
       it = 1.0-it;
     int size = knots.size();
     MPI_Send(&size, 1, MPI_INT, 1, 1, MPI_COMM_WORLD);
-    MPI_Send(knots.data(), size, MP_DOUBLE, 1, 2, MPI_COMM_WORLD);
+    MPI_Send(knots.data(), size, MPI_DOUBLE, 1, 2, MPI_COMM_WORLD);
     ofstream out("lr1.eps");
     lr->writePostscriptMesh(out);
     out.close();
@@ -158,7 +158,7 @@ static int case1() {
 
 // 3 patch, Lshape
 static int case2() {
-#ifdef USE_MPI
+#ifdef HAVE_MPI
   int rank;
 
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
@@ -172,8 +172,10 @@ static int case2() {
     lr[0]->refineBasisFunction( oneFunction[0]->getId() );
     vector<double> knots1 = lr[0]->getEdgeKnots(EAST, true);
     int size = knots1.size();
+
     MPI_Send(&size, 1, MPI_INT, 1, 1, MPI_COMM_WORLD);
-    MPI_Send(knots.data(), size, MPI_DOUBLE, 1, 2, MPI_COMM_WORLD);
+    MPI_Send(knots1.data(), size, MPI_DOUBLE, 1, 2, MPI_COMM_WORLD);
+
     MPI_Recv(&size, 1, MPI_INT, 1, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     vector<double> knots2(size);
     MPI_Recv(knots2.data(), size, MPI_DOUBLE, 1, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
@@ -188,50 +190,69 @@ static int case2() {
       return 1;
     if (!check_isotropic_refinement(lr[0]))
       return 1;
+    ofstream out("lr1.eps");
+    lr[0]->writePostscriptMesh(out);
+    out.close();
   } else if (rank == 1) {
     int size;
-    MPI_Recv(&size, 1, MPI_INT, 0, 1, MPI_COMM_WORLD);
+    MPI_Recv(&size, 1, MPI_INT, 0, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     vector<double> knots1(size);
     MPI_Recv(knots1.data(), size, MPI_DOUBLE, 0, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     vector<double> knots2 = lr[1]->getEdgeKnots(WEST, true);
     size = knots2.size();
+
     MPI_Send(&size, 1, MPI_INT, 0, 1, MPI_COMM_WORLD);
     MPI_Send(knots2.data(), size, MPI_DOUBLE, 0, 2, MPI_COMM_WORLD);
     lr[1]->matchParametricEdge(WEST, knots1, true);
     vector<double> knots3 = lr[1]->getEdgeKnots(SOUTH, true);
     size = knots3.size();
+
     MPI_Send(&size, 1, MPI_INT, 2, 1, MPI_COMM_WORLD);
     MPI_Send(knots3.data(), size, MPI_DOUBLE, 2, 2, MPI_COMM_WORLD);
+
     MPI_Recv(&size, 1, MPI_INT, 2, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     vector<double> knots4(size);
     MPI_Recv(knots4.data(), size, MPI_DOUBLE, 2, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     lr[1]->matchParametricEdge(SOUTH, knots4, true);
 
-    knots2 = lr[1]->getEdgeKnots(WEST, true)
+    knots2 = lr[1]->getEdgeKnots(WEST, true);
     size = knots2.size();
     MPI_Send(&size, 1, MPI_INT, 0, 3, MPI_COMM_WORLD);
     MPI_Send(knots2.data(), size, MPI_DOUBLE, 0, 4, MPI_COMM_WORLD);
 
-    MPI_Recv(&size, 1, MPI_INT, 1, 3, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    MPI_Recv(&size, 1, MPI_INT, 2, 3, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     knots4.resize(size);
-    MPI_Recv(knots4.data(), size, MPI_DOUBLE, 1, 4, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    MPI_Recv(knots4.data(), size, MPI_DOUBLE, 2, 4, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     knots3 = lr[1]->getEdgeKnots(SOUTH, true);
     if (!check_matching_knots(knots3, knots4))
       return 1;
     if (!check_isotropic_refinement(lr[1]))
       return 1;
+    ofstream out("lr2.eps");
+    lr[1]->writePostscriptMesh(out);
+    out.close();
   } else {
     int size;
-    MPI_Recv(&size, 1, MPI_INT, 1, 1, MPI_COMM_WORLD);
+    MPI_Recv(&size, 1, MPI_INT, 1, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     vector<double> knots3(size);
     MPI_Recv(knots3.data(), size, MPI_DOUBLE, 1, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
     vector<double> knots4 = lr[2]->getEdgeKnots(NORTH, true);
     size = knots4.size();
     MPI_Send(&size, 1, MPI_INT, 1, 1, MPI_COMM_WORLD);
     MPI_Send(knots4.data(), size, MPI_DOUBLE, 1, 2, MPI_COMM_WORLD);
     lr[2]->matchParametricEdge(NORTH, knots3, true);
+
+    knots4 = lr[2]->getEdgeKnots(NORTH, true);
+    size = knots4.size();
+    MPI_Send(&size, 1, MPI_INT, 1, 3, MPI_COMM_WORLD);
+    MPI_Send(knots4.data(), size, MPI_DOUBLE, 1, 4, MPI_COMM_WORLD);
+
     if (!check_isotropic_refinement(lr[2]))
       return 1;
+    ofstream out("lr3.eps");
+    lr[2]->writePostscriptMesh(out);
+    out.close();
   }
 #else
   vector<LRSplineSurface*> lr = readFile("../geometries/lshape.g2");

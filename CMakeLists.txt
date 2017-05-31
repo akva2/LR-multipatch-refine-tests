@@ -12,9 +12,10 @@ find_package(LRSpline REQUIRED)
 find_package(GoTools  REQUIRED)
 if(USE_MPI)
   find_package(MPI REQUIRED)
+  add_definitions(-DHAVE_MPI=1)
 endif()
 
-include_directories(${LRSpline_INCLUDE_DIRS} ${GoTools_INCLUDE_DIRS} ${MPI_INCLUDE_DIRS})
+include_directories(${LRSpline_INCLUDE_DIRS} ${GoTools_INCLUDE_DIRS} ${MPI_INCLUDE_PATH})
 add_definitions(${LRSpline_DEFINITIONS})
 
 add_executable(TestMatchingKnots src/TestMatchingKnots.cpp)
