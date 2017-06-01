@@ -225,6 +225,7 @@ static void mpifix2(int rank, LRSplineSurface* lr) {
     size = knots4.size();
     MPI_Send(&size, 1, MPI_INT, 1, 1, MPI_COMM_WORLD);
     MPI_Send(knots4.data(), size, MPI_DOUBLE, 1, 2, MPI_COMM_WORLD);
+    lr->matchParametricEdge(NORTH, knots3, true);
   }
 }
 
