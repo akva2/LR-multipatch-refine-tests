@@ -361,9 +361,31 @@ static int case3() {
     MPI_Allreduce(&change2, &change, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
   }
 
-  MPI_Recv(&size, 1, MPI_INT, (rank-1)%6, 1, MPI_COMM_WORLD);
-  vector<double> knots1;
-  MPI_Recv(
+  vector<double> knots1 = lr[rank]->getEdgeKnots(WEST, true);
+  vector<double> knots2 = lr[rank]->getEdgeKnots(SOUTH, true);
+  if (rank == 0) {
+    int size = knots2.size();
+    MPI_Send(&size, 1, MPI_INT, 5, 1, MPI_COMM_WORLD);
+    MPI_Send(knots2.data(), size, MPI_DOUBLE, 5, 2, MPI_COMM_WORLD);
+
+    MPI_Recv(&size, 1, MPI_INT, 1, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    knots2.resize(size);
+    MPI_Recv(knots2.data(), size, MPI_DOUBLE, 1, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+  } else {
+    int size;
+    MPI_Recv(&size, 1, MPI_INT, (rank+1)%6, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    vector<double> knots3(size);
+    MPI_Recv(knots3.data(), size, MPI_DOUBLE, (rank+1)%6, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+    size = knots2.size();
+    MPI_Send(&size, 1, MPI_INT, rank-1, 1, MPI_COMM_WORLD);
+    MPI_Send(knots2.data(), size, MPI_DOUBLE, rank-1, 2, MPI_COMM_WORLD);
+
+    knots2 = knots3;
+  }
+
+  if (!check_matching_knots(knots1, knots2))
+    return 1;
 
   if(! check_isotropic_refinement(lr[rank]))
     return 1;
