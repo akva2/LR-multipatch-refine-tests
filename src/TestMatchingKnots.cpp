@@ -160,7 +160,7 @@ static vector<LRSplineSurface*> geom2() {
 }
 
 static LRSplineSurface* mpigeom2(int rank) {
-  vector<LRSplineSurface*> allPatches = readFile("../geometries/lshape.g2");
+  vector<LRSplineSurface*> allPatches = geom2();
   return allPatches[rank]->copy();
 }
 
@@ -179,6 +179,7 @@ static void fix2(vector<LRSplineSurface*> &lr) {
 }
 
 static void mpifix2(int rank, LRSplineSurface* lr) {
+#ifdef HAVE_MPI
   if(rank == 0) {
     vector<double> knots1 = lr->getEdgeKnots(EAST, true);
     int size = knots1.size();
@@ -227,6 +228,7 @@ static void mpifix2(int rank, LRSplineSurface* lr) {
     MPI_Send(knots4.data(), size, MPI_DOUBLE, 1, 2, MPI_COMM_WORLD);
     lr->matchParametricEdge(NORTH, knots3, true);
   }
+#endif
 }
 
 static int check2(const vector<LRSplineSurface*> &lr) {
@@ -265,6 +267,11 @@ static vector<LRSplineSurface*> geom3() {
   return readFile("../geometries/star.g2");
 }
 
+static LRSplineSurface* mpigeom3(int rank) {
+  vector<LRSplineSurface*> allPatches = geom3();
+  return allPatches[rank];
+}
+
 static void fix3(vector<LRSplineSurface*> &lr) {
   bool change = true;
   while(change) {
@@ -278,6 +285,94 @@ static void fix3(vector<LRSplineSurface*> &lr) {
     }
   }
 }
+
+static void mpifix3(int rank, LRSplineSurface* lr) {
+#ifdef HAVE_MPI
+  if (rank > 5)
+    return;
+
+  int change = 1;
+  while (change) {
+    change = 0;
+    vector<double> knots1 = lr->getEdgeKnots(WEST, true);
+    vector<double> knots2 = lr->getEdgeKnots(SOUTH, true);
+    if (rank == 0) {
+      // recv south from 1
+      int size;
+      MPI_Recv(&size, 1, MPI_INT, 1, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      vector<double> knots3(size);
+      MPI_Recv(knots3.data(), size, MPI_DOUBLE, 1, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      change += lr->matchParametricEdge(WEST,  knots3, true);
+
+      // recv west from 5
+      MPI_Recv(&size, 1, MPI_INT, 5, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      vector<double> knots4(size);
+      MPI_Recv(knots4.data(), size, MPI_DOUBLE, 5, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      change += lr->matchParametricEdge(SOUTH,  knots4, true);
+
+      // send west to 1
+      size = knots1.size();
+      MPI_Send(&size, 1, MPI_INT, 1, 1, MPI_COMM_WORLD);
+      MPI_Send(knots1.data(), size, MPI_DOUBLE, 1, 2, MPI_COMM_WORLD);
+
+      // send west to 5
+      size = knots2.size();
+      MPI_Send(&size, 1, MPI_INT, 5, 1, MPI_COMM_WORLD);
+      MPI_Send(knots2.data(), size, MPI_DOUBLE, 5, 2, MPI_COMM_WORLD);
+    } else {
+      // send south knots
+      int size = knots2.size();
+      MPI_Send(&size, 1, MPI_INT, rank-1, 1, MPI_COMM_WORLD);
+      MPI_Send(knots2.data(), size, MPI_DOUBLE, rank-1, 2, MPI_COMM_WORLD);
+
+      // send west knots
+      size = knots1.size();
+      MPI_Send(&size, 1, MPI_INT, (rank+1)%6, 1, MPI_COMM_WORLD);
+      MPI_Send(knots1.data(), size, MPI_DOUBLE, (rank+1)%6, 2, MPI_COMM_WORLD);
+
+      // recv south knots
+      MPI_Recv(&size, 1, MPI_INT, (rank+1)%6, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      knots2.resize(size);
+      MPI_Recv(knots2.data(), size, MPI_DOUBLE, (rank+1)%6, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+      // recv west knots
+      MPI_Recv(&size, 1, MPI_INT, rank-1, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      knots1.resize(size);
+      MPI_Recv(knots1.data(), size, MPI_DOUBLE, rank-1, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      change += lr->matchParametricEdge(WEST,  knots2, true);
+      change += lr->matchParametricEdge(SOUTH,  knots1, true);
+    }
+    change += lr->matchParametricEdge(WEST,  knots2, true);
+
+    int change2 = change;
+    MPI_Allreduce(&change2, &change, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+  }
+
+  vector<double> knots1 = lr->getEdgeKnots(WEST, true);
+  vector<double> knots2 = lr->getEdgeKnots(SOUTH, true);
+  if (rank == 0) {
+    int size = knots2.size();
+    MPI_Send(&size, 1, MPI_INT, 5, 1, MPI_COMM_WORLD);
+    MPI_Send(knots2.data(), size, MPI_DOUBLE, 5, 2, MPI_COMM_WORLD);
+
+    MPI_Recv(&size, 1, MPI_INT, 1, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    knots2.resize(size);
+    MPI_Recv(knots2.data(), size, MPI_DOUBLE, 1, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+  } else {
+    int size;
+    MPI_Recv(&size, 1, MPI_INT, (rank+1)%6, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    vector<double> knots3(size);
+    MPI_Recv(knots3.data(), size, MPI_DOUBLE, (rank+1)%6, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+    size = knots2.size();
+    MPI_Send(&size, 1, MPI_INT, rank-1, 1, MPI_COMM_WORLD);
+    MPI_Send(knots2.data(), size, MPI_DOUBLE, rank-1, 2, MPI_COMM_WORLD);
+
+    knots2 = knots3;
+  }
+#endif
+}
+
 static int check3(const vector<LRSplineSurface*> &lr) {
   for(int i=0; i<6; ++i) {
     int j = (i+1)%6;
@@ -709,6 +804,7 @@ static int case3() {
  *
  **********************************************************/
 
+#ifdef HAVE_MPI
 vector<LRSplineSurface*> collectPatches(int rank, int numProc, LRSplineSurface* patch) {
   vector<LRSplineSurface*> result;
   if(rank == 0) {
@@ -737,6 +833,7 @@ vector<LRSplineSurface*> collectPatches(int rank, int numProc, LRSplineSurface* 
   }
   return result;
 }
+#endif
 
 /***************** Main method  ***************************
  *
@@ -765,26 +862,35 @@ int main(int argc, char **argv) {
   int iterations = atoi(argv[3]);
   int               patches[]= {      0,       0,         3,        6,        2};
   geom_function     geom[]   = {nullptr, nullptr,     geom2,    geom3,    geom4};
-  mpigeom_function  mpigeom[]= {nullptr, nullptr,  mpigeom2,  nullptr,  nullptr};
+  mpigeom_function  mpigeom[]= {nullptr, nullptr,  mpigeom2, mpigeom3,  nullptr};
   check_function    check[]  = {nullptr, nullptr,    check2,   check3,   check4};
   fix_function      fix[]    = {nullptr, nullptr,      fix2,     fix3,     fix4};
-  mpifix_function   mpifix[] = {nullptr, nullptr,   mpifix2,  nullptr,  nullptr};
-  refine_function   refine[] = {nullptr, refine1,refine2};
-  mpiref_function   mpiref[] = {nullptr, mpiref1,mpiref2};
+  mpifix_function   mpifix[] = {nullptr, nullptr,   mpifix2,  mpifix3,  nullptr};
+  refine_function   refine[] = {nullptr, refine1,   refine2};
+  mpiref_function   mpiref[] = {nullptr, mpiref1,   mpiref2};
 
 #ifdef HAVE_MPI
   MPI_Init(&argc, &argv);
   int rank;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+  cout << rank << ": Initialized" << endl;
+  if(rank >= patches[geometry]) {
+    MPI_Finalize();
+    return 0;
+  }
 
   LRSplineSurface *patch = mpigeom[geometry](rank);
+  cout << "Read geometry\n";
   for(int i=0; i<iterations; i++) {
     mpiref[refinement](rank, patch);
+    cout << "Did refinement - " << rank << endl;
     mpifix[geometry](  rank, patch);
+    cout << "Fixed refinement - " << rank << endl;
 
     patch->generateIDs(); // indexing is reset after refinement
   }
   model = collectPatches(rank, patches[geometry], patch);
+  cout << "Collected patches - " << rank << endl;
 
   if(rank == 0)
     result = check[geometry](model);
