@@ -1,4 +1,5 @@
 #include <iostream>
+#include <sstream>
 #include <fstream>
 #include <sstream>
 #include <cmath>
@@ -19,13 +20,13 @@ using namespace Go;
 typedef int  (*check_function)( const vector<LRSplineSurface*>&);
 
 // refinement, geometry and topology functions related to each case (SERIAL)
-typedef void (*refine_function)(  const vector<LRSplineSurface*>&);
-typedef void (*fix_function)(     vector<LRSplineSurface*>&);
+typedef void                     (*refine_function)(const vector<LRSplineSurface*>&);
+typedef void                     (*fix_function)(         vector<LRSplineSurface*>&);
 typedef vector<LRSplineSurface*> (*geom_function)();
 
 // refinement, geometry and topology functions related to each case (MPI)
-typedef void (*mpiref_function)(int, LRSplineSurface*);
-typedef void (*mpifix_function)(int, LRSplineSurface*);
+typedef void             (*mpiref_function)( int, LRSplineSurface*);
+typedef void             (*mpifix_function)( int, LRSplineSurface*);
 typedef LRSplineSurface* (*mpigeom_function)(int);
 
 // read multipatch g2 file and return LRSplineSurface representation of all patches
@@ -57,7 +58,8 @@ vector<LRSplineSurface*> readFile(const string &filename) {
 }
 
 // write multipatch lr model to file for manual inspection
-bool writeFile(const string &filename, vector<LRSplineSurface*> model) {
+void writeFile(const string &filename, vector<LRSplineSurface*> model) {
+  if(model.size() == 0) return;
   ofstream out(filename);
   for(auto lr : model)
     out << *lr << endl;
@@ -75,7 +77,6 @@ static bool check_orig_knots_is_subset(const std::vector<double>& knots, const s
   for (auto& it : new_knots)
     if (std::find_if(knots.begin(), knots.end(), [it](double a){return fabs(it-a) < 1e-4;}) == knots.end())
       return false;
-
   return true;
 }
 
@@ -178,7 +179,6 @@ static void fix2(vector<LRSplineSurface*> &lr) {
 }
 
 static void mpifix2(int rank, LRSplineSurface* lr) {
-  int size;
   if(rank == 0) {
     vector<double> knots1 = lr->getEdgeKnots(EAST, true);
     int size = knots1.size();
@@ -193,6 +193,7 @@ static void mpifix2(int rank, LRSplineSurface* lr) {
     knots2.resize(size);
     MPI_Recv(knots2.data(), size, MPI_DOUBLE, 1, 4, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
   } else if(rank == 1) {
+    int size;
     MPI_Recv(&size, 1, MPI_INT, 0, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     vector<double> knots1(size);
     MPI_Recv(knots1.data(), size, MPI_DOUBLE, 0, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
@@ -215,11 +216,8 @@ static void mpifix2(int rank, LRSplineSurface* lr) {
     MPI_Send(&size, 1, MPI_INT, 0, 3, MPI_COMM_WORLD);
     MPI_Send(knots2.data(), size, MPI_DOUBLE, 0, 4, MPI_COMM_WORLD);
 
-    MPI_Recv(&size, 1, MPI_INT, 1, 3, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-    knots4.resize(size);
-    MPI_Recv(knots4.data(), size, MPI_DOUBLE, 1, 4, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-    knots3 = lr->getEdgeKnots(SOUTH, true);
   } else if(rank == 2) {
+    int size;
     MPI_Recv(&size, 1, MPI_INT, 1, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     vector<double> knots3(size);
     MPI_Recv(knots3.data(), size, MPI_DOUBLE, 1, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
@@ -704,6 +702,41 @@ static int case3() {
   return 0;
 }
 
+/***************** MPI  methods ***************************
+ *
+ * Specialized functions only needed in the MPI runs
+ *
+ **********************************************************/
+
+vector<LRSplineSurface*> collectPatches(int rank, int numProc, LRSplineSurface* patch) {
+  vector<LRSplineSurface*> result;
+  if(rank == 0) {
+    result.push_back(patch);
+    for(int i=1; i<numProc; i++) {
+      int source = i;
+      int tag    = i;
+      int size;
+      MPI_Recv(&size,      1,    MPI_INT,  source, tag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      char serialized[size];
+      MPI_Recv(serialized, size, MPI_CHAR, source, tag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      string str(serialized);
+      result.push_back(new LRSplineSurface());
+      stringstream(str) >> *result.back();
+    }
+  } else {
+    stringstream ss;
+    ss << *patch;
+    string serialized = ss.str();
+    int size = serialized.size() + 1; // sending this as char-array so end with a terminating 0
+
+    int dest = 0;
+    int tag  = rank;
+    MPI_Send(&size,                 1, MPI_INT,  dest, tag, MPI_COMM_WORLD);
+    MPI_Send(serialized.c_str(), size, MPI_CHAR, dest, tag, MPI_COMM_WORLD);
+  }
+  return result;
+}
+
 /***************** Main method  ***************************
  *
  * The real program starts here....
@@ -729,6 +762,7 @@ int main(int argc, char **argv) {
   int geometry   = atoi(argv[1]);
   int refinement = atoi(argv[2]);
   int iterations = atoi(argv[3]);
+  int               patches[]= {      0,       0,         3,        6,        2};
   geom_function     geom[]   = {nullptr, nullptr,     geom2,    geom3,    geom4};
   mpigeom_function  mpigeom[]= {nullptr, nullptr,  mpigeom2,  nullptr,  nullptr};
   check_function    check[]  = {nullptr, nullptr,    check2,   check3,   check4};
@@ -741,18 +775,22 @@ int main(int argc, char **argv) {
   MPI_Init(&argc, &argv);
   int rank;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-  cout  << "Hello world, I am rank " << rank << endl;
 
   LRSplineSurface *patch = mpigeom[geometry](rank);
-  cout  << "Read single patch\n";
   for(int i=0; i<iterations; i++) {
     mpiref[refinement](rank, patch);
-    cout  << "Refined in PARALLEL\n";
     mpifix[geometry](  rank, patch);
-    cout  << "All fixed in PARALLEL ("<<rank<<")\n";
 
     patch->generateIDs(); // indexing is reset after refinement
   }
+  model = collectPatches(rank, patches[geometry], patch);
+
+  if(rank == 0)
+    result = check[geometry](model);
+  else
+    result = 0;
+  MPI_Finalize();
+
 #else
   model = geom[geometry]();
 
@@ -764,13 +802,9 @@ int main(int argc, char **argv) {
       lr->generateIDs(); // indexing is reset after refinement
   }
   result = check[geometry](model);
+#endif
+
   // print results to file for manual debugging
   writeFile("mesh.lr", model);
-#endif
-
-#ifdef HAVE_MPI
-  MPI_Finalize();
-#endif
-
   return result;
 }
