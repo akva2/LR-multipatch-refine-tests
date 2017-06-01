@@ -1,5 +1,6 @@
 #include <iostream>
 #include <fstream>
+#include <sstream>
 #include <cmath>
 #include <algorithm>
 #include "LRSpline/LRSplineSurface.h"
@@ -284,10 +285,10 @@ static int case2() {
   for(auto l : lr)
     if(! check_isotropic_refinement(l) )
       return 1;
-#endif
 
   // print results to file for manual debugging
   writeFile("mesh.lr", lr);
+#endif
 
   return 0;
 }
@@ -295,6 +296,85 @@ static int case2() {
 // 6 patch, star
 static int case3() {
   vector<LRSplineSurface*> lr = readFile("../geometries/star.g2");
+#ifdef HAVE_MPI
+  int rank;
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+  if (rank > 5)
+    return 0;
+
+  lr[rank]->refineBasisFunction(3+rank);
+
+  int change = 1;
+  while (change) {
+    change = 0;
+    vector<double> knots1 = lr[rank]->getEdgeKnots(WEST, true);
+    vector<double> knots2 = lr[rank]->getEdgeKnots(SOUTH, true);
+    if (rank == 0) {
+      // recv south from 1
+      int size;
+      MPI_Recv(&size, 1, MPI_INT, 1, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      vector<double> knots3(size);
+      MPI_Recv(knots3.data(), size, MPI_DOUBLE, 1, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      change += lr[0]->matchParametricEdge(WEST,  knots3, true);
+
+      // recv west from 5
+      MPI_Recv(&size, 1, MPI_INT, 5, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      vector<double> knots4(size);
+      MPI_Recv(knots4.data(), size, MPI_DOUBLE, 5, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      change += lr[0]->matchParametricEdge(SOUTH,  knots4, true);
+
+      // send west to 1
+      size = knots1.size();
+      MPI_Send(&size, 1, MPI_INT, 1, 1, MPI_COMM_WORLD);
+      MPI_Send(knots1.data(), size, MPI_DOUBLE, 1, 2, MPI_COMM_WORLD);
+
+      // send west to 5
+      size = knots2.size();
+      MPI_Send(&size, 1, MPI_INT, 5, 1, MPI_COMM_WORLD);
+      MPI_Send(knots2.data(), size, MPI_DOUBLE, 5, 2, MPI_COMM_WORLD);
+    } else {
+      // send south knots
+      int size = knots2.size();
+      MPI_Send(&size, 1, MPI_INT, rank-1, 1, MPI_COMM_WORLD);
+      MPI_Send(knots2.data(), size, MPI_DOUBLE, rank-1, 2, MPI_COMM_WORLD);
+
+      // send west knots
+      size = knots1.size();
+      MPI_Send(&size, 1, MPI_INT, (rank+1)%6, 1, MPI_COMM_WORLD);
+      MPI_Send(knots1.data(), size, MPI_DOUBLE, (rank+1)%6, 2, MPI_COMM_WORLD);
+
+      // recv south knots
+      MPI_Recv(&size, 1, MPI_INT, (rank+1)%6, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      knots2.resize(size);
+      MPI_Recv(knots2.data(), size, MPI_DOUBLE, (rank+1)%6, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+      // recv west knots
+      MPI_Recv(&size, 1, MPI_INT, rank-1, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      knots1.resize(size);
+      MPI_Recv(knots1.data(), size, MPI_DOUBLE, rank-1, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      change += lr[rank]->matchParametricEdge(WEST,  knots2, true);
+      change += lr[rank]->matchParametricEdge(SOUTH,  knots1, true);
+    }
+    change += lr[rank]->matchParametricEdge(WEST,  knots2, true);
+
+    int change2 = change;
+    MPI_Allreduce(&change2, &change, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+  }
+
+  MPI_Recv(&size, 1, MPI_INT, (rank-1)%6, 1, MPI_COMM_WORLD);
+  vector<double> knots1;
+  MPI_Recv(
+
+  if(! check_isotropic_refinement(lr[rank]))
+    return 1;
+
+  std::stringstream str;
+  str << "lr" << rank << ".lr";
+  ofstream out(str.str());
+  out << *lr[rank];
+  out.close();
+
+#else
   lr[0]->refineBasisFunction(3);
   lr[1]->refineBasisFunction(4);
   lr[2]->refineBasisFunction(5);
@@ -326,6 +406,7 @@ static int case3() {
 
   // print results to file for manual debugging
   writeFile("mesh.lr", lr);
+#endif
 
   return 0;
 }
