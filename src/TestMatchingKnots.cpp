@@ -141,6 +141,23 @@ static void mpiref2(int rank, LRSplineSurface *patch) {
   patch->refineBasisFunction((13*rank+17) % patch->nBasisFunctions());
 }
 
+// Refinement strategy 3: refine SOUTH-EAST corner of the FIRST patch
+static void refine3(const vector<LRSplineSurface*>& model) {
+  vector<Basisfunction*> oneFunction;
+  vector<int> corner_idx;
+  // fetch index of all 4 corners
+  model[0]->getEdgeFunctions(oneFunction, SOUTH_EAST);
+  corner_idx.push_back(oneFunction[0]->getId());
+  // do the actual refinement
+  model[0]->refineBasisFunction(corner_idx);
+}
+
+// Refinement strategy 3: MPI implementation
+static void mpiref3(int rank, LRSplineSurface *patch) {
+  if(rank > 0) return; // skip all but the first patch
+  refine3(vector<LRSplineSurface*>(1, patch));
+}
+
 /***************** Case 2: L-shape  **********************
  *
  * +--------+--------+
@@ -482,8 +499,9 @@ int main(int argc, char **argv) {
     std::cerr << "    3 = Star, 6 patches" << std::endl;
     std::cerr << "    4 = Self-loop, 2 patches" << std::endl;
     std::cerr << "  refinement: " << std::endl;
-    std::cerr << "    1 = Corner refinement (all corners on last patch)" << std::endl;
+    std::cerr << "    1 = All corners on first patch" << std::endl;
     std::cerr << "    2 = One random function on each patch (chosen independently)" << std::endl;
+    std::cerr << "    3 = South-East corner on first patch" << std::endl;
     std::cerr << "  iterations: (int) number of refinement that is to be performed" << std::endl;
     return 1;
   }
@@ -499,8 +517,8 @@ int main(int argc, char **argv) {
   check_function    check[]  = {nullptr, nullptr,    check2,   check3,   check4};
   fix_function      fix[]    = {nullptr, nullptr,      fix2,     fix3,     fix4};
   mpifix_function   mpifix[] = {nullptr, nullptr,   mpifix2,  mpifix3,  nullptr};
-  refine_function   refine[] = {nullptr, refine1,   refine2};
-  mpiref_function   mpiref[] = {nullptr, mpiref1,   mpiref2};
+  refine_function   refine[] = {nullptr, refine1,   refine2,  refine3};
+  mpiref_function   mpiref[] = {nullptr, mpiref1,   mpiref2,  mpiref3};
 
 #ifdef HAVE_MPI
   MPI_Init(&argc, &argv);
