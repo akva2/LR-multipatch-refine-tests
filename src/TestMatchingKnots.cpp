@@ -15,10 +15,18 @@ using namespace std;
 using namespace LR;
 using namespace Go;
 
+// serial checking of global model
 typedef int  (*check_function)( const vector<LRSplineSurface*>&);
-typedef void (*refine_function)(      vector<LRSplineSurface*>&);
-typedef void (*fix_function)(         vector<LRSplineSurface*>&);
+
+// refinement, geometry and topology functions related to each case (SERIAL)
+typedef void (*refine_function)(  const vector<LRSplineSurface*>&);
+typedef void (*fix_function)(     vector<LRSplineSurface*>&);
 typedef vector<LRSplineSurface*> (*geom_function)();
+
+// refinement, geometry and topology functions related to each case (MPI)
+typedef void (*mpiref_function)(int, LRSplineSurface*);
+typedef void (*mpifix_function)(int, LRSplineSurface*);
+typedef LRSplineSurface* (*mpigeom_function)(int);
 
 // read multipatch g2 file and return LRSplineSurface representation of all patches
 vector<LRSplineSurface*> readFile(const string &filename) {
@@ -98,27 +106,38 @@ static bool check_isotropic_refinement(LRSplineSurface *lr) {
  *
  *********************************************************/
 
-// Refinement strategy 1: refine all 4 corners of the LAST patch
-static void refine1(vector<LRSplineSurface*>& model) {
+// Refinement strategy 1: refine all 4 corners of the FIRST patch
+static void refine1(const vector<LRSplineSurface*>& model) {
   vector<Basisfunction*> oneFunction;
   vector<int> corner_idx;
   // fetch index of all 4 corners
-  model.back()->getEdgeFunctions(oneFunction, SOUTH_WEST);
+  model[0]->getEdgeFunctions(oneFunction, SOUTH_WEST);
   corner_idx.push_back(oneFunction[0]->getId());
-  model.back()->getEdgeFunctions(oneFunction, SOUTH_EAST);
+  model[0]->getEdgeFunctions(oneFunction, SOUTH_EAST);
   corner_idx.push_back(oneFunction[0]->getId());
-  model.back()->getEdgeFunctions(oneFunction, NORTH_WEST);
+  model[0]->getEdgeFunctions(oneFunction, NORTH_WEST);
   corner_idx.push_back(oneFunction[0]->getId());
-  model.back()->getEdgeFunctions(oneFunction, NORTH_EAST);
+  model[0]->getEdgeFunctions(oneFunction, NORTH_EAST);
   corner_idx.push_back(oneFunction[0]->getId());
   // do the actual refinement
-  model.back()->refineBasisFunction(corner_idx);
+  model[0]->refineBasisFunction(corner_idx);
+}
+
+// Refinement strategy 1: MPI implementation
+static void mpiref1(int rank, LRSplineSurface *patch) {
+  if(rank > 0) return; // skip all but the first patch
+  refine1(vector<LRSplineSurface*>(1, patch));
 }
 
 // Refinement strategy 2: randomly one function on all patches independently
-static void refine2(vector<LRSplineSurface*>& model) {
+static void refine2(const vector<LRSplineSurface*>& model) {
   for(size_t i=0; i<model.size(); ++i)
     model[i]->refineBasisFunction((13*i+17) % model[i]->nBasisFunctions());
+}
+
+// Refinement strategy 2: MPI implementation
+static void mpiref2(int rank, LRSplineSurface *patch) {
+  patch->refineBasisFunction((13*rank+17) % patch->nBasisFunctions());
 }
 
 /***************** Case 2: L-shape  **********************
@@ -135,23 +154,80 @@ static void refine2(vector<LRSplineSurface*>& model) {
  *
  *********************************************************/
 
-// Geometry 2: lshape
 static vector<LRSplineSurface*> geom2() {
   return readFile("../geometries/lshape.g2");
 }
 
-static void fix2(vector<LRSplineSurface*> &lr) {
-  // match patch 1 to patch 2
-  vector<double> knots3 = lr[1]->getEdgeKnots(SOUTH, true);
-  vector<double> knots4 = lr[2]->getEdgeKnots(NORTH, true);
-  lr[1]->matchParametricEdge(SOUTH, knots4, true);
-  lr[2]->matchParametricEdge(NORTH, knots3, true);
+static LRSplineSurface* mpigeom2(int rank) {
+  vector<LRSplineSurface*> allPatches = readFile("../geometries/lshape.g2");
+  return allPatches[rank]->copy();
+}
 
+static void fix2(vector<LRSplineSurface*> &lr) {
   // match patch 0 to patch 1
   vector<double> knots1 = lr[0]->getEdgeKnots(EAST, true);
   vector<double> knots2 = lr[1]->getEdgeKnots(WEST, true);
   lr[0]->matchParametricEdge(EAST, knots2, true);
   lr[1]->matchParametricEdge(WEST, knots1, true);
+
+  // match patch 1 to patch 2
+  vector<double> knots3 = lr[1]->getEdgeKnots(SOUTH, true);
+  vector<double> knots4 = lr[2]->getEdgeKnots(NORTH, true);
+  lr[1]->matchParametricEdge(SOUTH, knots4, true);
+  lr[2]->matchParametricEdge(NORTH, knots3, true);
+}
+
+static void mpifix2(int rank, LRSplineSurface* lr) {
+  int size;
+  if(rank == 0) {
+    vector<double> knots1 = lr->getEdgeKnots(EAST, true);
+    int size = knots1.size();
+    MPI_Send(&size, 1, MPI_INT, 1, 1, MPI_COMM_WORLD);
+    MPI_Send(knots1.data(), size, MPI_DOUBLE, 1, 2, MPI_COMM_WORLD);
+    MPI_Recv(&size, 1, MPI_INT, 1, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    vector<double> knots2(size);
+    MPI_Recv(knots2.data(), size, MPI_DOUBLE, 1, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    lr->matchParametricEdge(EAST, knots2, true);
+
+    MPI_Recv(&size, 1, MPI_INT, 1, 3, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    knots2.resize(size);
+    MPI_Recv(knots2.data(), size, MPI_DOUBLE, 1, 4, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+  } else if(rank == 1) {
+    MPI_Recv(&size, 1, MPI_INT, 0, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    vector<double> knots1(size);
+    MPI_Recv(knots1.data(), size, MPI_DOUBLE, 0, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    vector<double> knots2 = lr->getEdgeKnots(WEST, true);
+    size = knots2.size();
+    MPI_Send(&size, 1, MPI_INT, 0, 1, MPI_COMM_WORLD);
+    MPI_Send(knots2.data(), size, MPI_DOUBLE, 0, 2, MPI_COMM_WORLD);
+    lr->matchParametricEdge(WEST, knots1, true);
+    vector<double> knots3 = lr->getEdgeKnots(SOUTH, true);
+    size = knots3.size();
+    MPI_Send(&size, 1, MPI_INT, 2, 1, MPI_COMM_WORLD);
+    MPI_Send(knots3.data(), size, MPI_DOUBLE, 2, 2, MPI_COMM_WORLD);
+    MPI_Recv(&size, 1, MPI_INT, 2, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    vector<double> knots4(size);
+    MPI_Recv(knots4.data(), size, MPI_DOUBLE, 2, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    lr->matchParametricEdge(SOUTH, knots4, true);
+
+    knots2 = lr->getEdgeKnots(WEST, true);
+    size = knots2.size();
+    MPI_Send(&size, 1, MPI_INT, 0, 3, MPI_COMM_WORLD);
+    MPI_Send(knots2.data(), size, MPI_DOUBLE, 0, 4, MPI_COMM_WORLD);
+
+    MPI_Recv(&size, 1, MPI_INT, 1, 3, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    knots4.resize(size);
+    MPI_Recv(knots4.data(), size, MPI_DOUBLE, 1, 4, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    knots3 = lr->getEdgeKnots(SOUTH, true);
+  } else if(rank == 2) {
+    MPI_Recv(&size, 1, MPI_INT, 1, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    vector<double> knots3(size);
+    MPI_Recv(knots3.data(), size, MPI_DOUBLE, 1, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    vector<double> knots4 = lr->getEdgeKnots(NORTH, true);
+    size = knots4.size();
+    MPI_Send(&size, 1, MPI_INT, 1, 1, MPI_COMM_WORLD);
+    MPI_Send(knots4.data(), size, MPI_DOUBLE, 1, 2, MPI_COMM_WORLD);
+  }
 }
 
 static int check2(const vector<LRSplineSurface*> &lr) {
@@ -647,35 +723,50 @@ int main(int argc, char **argv) {
     std::cerr << "  iterations: (int) number of refinement that is to be performed" << std::endl;
     return 1;
   }
-
-#ifdef HAVE_MPI
-  MPI_Init(&argc, &argv);
-#endif
+  int result = 0;
 
   vector<LRSplineSurface*> model;
   int geometry   = atoi(argv[1]);
   int refinement = atoi(argv[2]);
   int iterations = atoi(argv[3]);
-  geom_function   geom[]   = {nullptr, nullptr,  geom2,   geom3,  geom4};
-  check_function  check[]  = {nullptr, nullptr, check2,  check3, check4};
-  fix_function    fix[]    = {nullptr, nullptr,   fix2,    fix3,   fix4};
-  refine_function refine[] = {nullptr, refine1,refine2};
+  geom_function     geom[]   = {nullptr, nullptr,     geom2,    geom3,    geom4};
+  mpigeom_function  mpigeom[]= {nullptr, nullptr,  mpigeom2,  nullptr,  nullptr};
+  check_function    check[]  = {nullptr, nullptr,    check2,   check3,   check4};
+  fix_function      fix[]    = {nullptr, nullptr,      fix2,     fix3,     fix4};
+  mpifix_function   mpifix[] = {nullptr, nullptr,   mpifix2,  nullptr,  nullptr};
+  refine_function   refine[] = {nullptr, refine1,refine2};
+  mpiref_function   mpiref[] = {nullptr, mpiref1,mpiref2};
 
+#ifdef HAVE_MPI
+  MPI_Init(&argc, &argv);
+  int rank;
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+  cout  << "Hello world, I am rank " << rank << endl;
+
+  LRSplineSurface *patch = mpigeom[geometry](rank);
+  cout  << "Read single patch\n";
+  for(int i=0; i<iterations; i++) {
+    mpiref[refinement](rank, patch);
+    cout  << "Refined in PARALLEL\n";
+    mpifix[geometry](  rank, patch);
+    cout  << "All fixed in PARALLEL ("<<rank<<")\n";
+
+    patch->generateIDs(); // indexing is reset after refinement
+  }
+#else
   model = geom[geometry]();
 
   for(int i=0; i<iterations; i++) {
     refine[refinement](model);
-    fix[geometry](model);
+    fix[geometry](    model);
 
-    for(auto lr : model) {
-      lr->generateIDs();
-    }
+    for(auto lr : model)
+      lr->generateIDs(); // indexing is reset after refinement
   }
-
-  int result = check[geometry](model);
-
+  result = check[geometry](model);
   // print results to file for manual debugging
   writeFile("mesh.lr", model);
+#endif
 
 #ifdef HAVE_MPI
   MPI_Finalize();
