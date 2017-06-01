@@ -33,8 +33,13 @@ vector<LRSplineSurface*> readFile(const string &filename) {
     ws(in); // eat whitespaces
   }
 
-  for(auto lr : results)
+  for(auto lr : results) {
     lr->generateIDs();
+    // disable all a posteriori mesh fixes (makes them unpredictable)
+    lr->setCloseGaps(false);
+    lr->setMaxTjoints(-1);
+    lr->setMaxAspectRatio(1e9, false);
+  }
   return results;
 }
 
