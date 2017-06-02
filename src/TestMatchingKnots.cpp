@@ -173,7 +173,7 @@ static void mpiref3(int rank, LRSplineSurface *patch) {
  *********************************************************/
 
 static vector<LRSplineSurface*> geom2() {
-  return readFile("../geometries/lshape.g2");
+  return readFile("../geometries/2D/lshape.g2");
 }
 
 static LRSplineSurface* mpigeom2(int rank) {
@@ -281,7 +281,7 @@ static int check2(const vector<LRSplineSurface*> &lr) {
  *********************************************************/
 
 static vector<LRSplineSurface*> geom3() {
-  return readFile("../geometries/star.g2");
+  return readFile("../geometries/2D/star.g2");
 }
 
 static LRSplineSurface* mpigeom3(int rank) {
@@ -418,7 +418,7 @@ static int check3(const vector<LRSplineSurface*> &lr) {
  *********************************************************/
 
 static vector<LRSplineSurface*> geom4() {
-  return readFile("../geometries/self-loop.g2");
+  return readFile("../geometries/2D/self-loop.g2");
 }
 
 static void fix4(vector<LRSplineSurface*> &lr) {
