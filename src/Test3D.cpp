@@ -1,0 +1,313 @@
+#include <iostream>
+#include <sstream>
+#include <fstream>
+#include <sstream>
+#include <cmath>
+#include <algorithm>
+#include "LRSpline/LRSplineVolume.h"
+#include "GoTools/trivariate/SplineVolume.h"
+#include "GoTools/geometry/ObjectHeader.h"
+
+#ifdef HAVE_MPI
+#include <mpi.h>
+#endif
+
+using namespace std;
+using namespace LR;
+using namespace Go;
+
+// serial checking of global model
+typedef int  (*check_function)( const vector<LRSplineVolume*>&);
+
+// refinement, geometry and topology functions related to each case (SERIAL)
+typedef void                    (*refine_function)(const vector<LRSplineVolume*>&);
+typedef void                    (*fix_function)(         vector<LRSplineVolume*>&);
+typedef vector<LRSplineVolume*> (*geom_function)();
+
+// refinement, geometry and topology functions related to each case (MPI)
+typedef void            (*mpiref_function)( int, LRSplineVolume*);
+typedef void            (*mpifix_function)( int, LRSplineVolume*);
+typedef LRSplineVolume* (*mpigeom_function)(int);
+
+// read multipatch g2 file and return LRSplineVolume representation of all patches
+vector<LRSplineVolume*> readFile(const string &filename) {
+  vector<LRSplineVolume*> results;
+  ObjectHeader head;
+  SplineVolume sv;
+
+  ifstream in(filename);
+  if(!in.good()) {
+    cerr << "could not open file: " << filename << endl;
+    return results;
+  }
+
+  while(!in.eof()) { // for all patches
+    in >> head >> sv;
+    results.push_back(new LRSplineVolume(&sv));
+    ws(in); // eat whitespaces
+  }
+
+  for(auto lr : results)
+    lr->generateIDs();
+  return results;
+}
+
+// write multipatch lr model to file for manual inspection
+void writeFile(const string &filename, vector<LRSplineVolume*> model) {
+  if(model.size() == 0) return;
+  ofstream out(filename);
+  for(auto lr : model)
+    out << *lr << endl;
+}
+
+/***************** ASSERTION FUNCTIONS  ******************
+ *
+ * logical tests to see if the resulting multipatch model
+ * is indeed matching.
+ *
+ *********************************************************/
+
+// check that all elements continue to be perfect squares (isotropic / basis-function refinement)
+static bool check_isotropic_refinement(LRSplineVolume *lr) {
+  for(auto el : lr->getAllElements())
+    if(fabs( (el->umax() - el->umin()) - (el->vmax() - el->vmin()) ) >1e-4 ||
+       fabs( (el->umax() - el->umin()) - (el->wmax() - el->wmin()) ) >1e-4)
+      return false;
+
+  return true;
+}
+
+/***************** REFINEMENT FUNCTIONS  *****************
+ *
+ * different refinement schemes that is used to test all
+ * geometries.
+ *
+ *********************************************************/
+
+// Refinement strategy 1: refine all 8 corners of the FIRST patch
+static void refine1(const vector<LRSplineVolume*>& model) {
+  vector<Basisfunction*> oneFunction;
+  vector<int> corner_idx;
+  // fetch index of all 4 corners
+  for(int i=0; i<2; i++) {
+    for(int j=0; j<2; j++) {
+      for(int k=0; k<2; k++) {
+        int edg = 0;
+        edg |= (i) ? WEST  : EAST;
+        edg |= (j) ? NORTH : SOUTH;
+        edg |= (k) ? TOP   : BOTTOM;
+        model[0]->getEdgeFunctions(oneFunction, (parameterEdge) edg);
+        corner_idx.push_back(oneFunction[0]->getId());
+      }
+    }
+  }
+  model[0]->refineBasisFunction(corner_idx);
+}
+
+// Refinement strategy 1: MPI implementation
+static void mpiref1(int rank, LRSplineVolume *patch) {
+  if(rank > 0) return; // skip all but the first patch
+  refine1(vector<LRSplineVolume*>(1, patch));
+}
+
+// Refinement strategy 2: randomly one function on all patches independently
+static void refine2(const vector<LRSplineVolume*>& model) {
+  for(size_t i=0; i<model.size(); ++i)
+    model[i]->refineBasisFunction((13*i+17) % model[i]->nBasisFunctions());
+}
+
+// Refinement strategy 2: MPI implementation
+static void mpiref2(int rank, LRSplineVolume *patch) {
+  patch->refineBasisFunction((13*rank+17) % patch->nBasisFunctions());
+}
+
+// Refinement strategy 3: refine SOUTH-WEST-BOTTOM corner of the FIRST patch
+static void refine3(const vector<LRSplineVolume*>& model) {
+  vector<Basisfunction*> oneFunction;
+  vector<int> corner_idx;
+  // fetch index of all 4 corners
+  model[0]->getEdgeFunctions(oneFunction, (parameterEdge) SOUTH|WEST|BOTTOM);
+  corner_idx.push_back(oneFunction[0]->getId());
+  // do the actual refinement
+  model[0]->refineBasisFunction(corner_idx);
+}
+
+// Refinement strategy 3: MPI implementation
+static void mpiref3(int rank, LRSplineVolume *patch) {
+  if(rank > 0) return; // skip all but the first patch
+  refine3(vector<LRSplineVolume*>(1, patch));
+}
+
+/***************** Case 1: L-shape  **********************
+ *
+ * |z-axis
+ * +--------+
+ * |        |
+ * |    #3  |           (extruded into y-plane)
+ * |        |
+ * +--------+--------+
+ * |        |        |
+ * |   #1   |   #2   |
+ * |        |        |
+ * +--------+--------+--> x-axis
+ *
+ *********************************************************/
+
+static vector<LRSplineVolume*> geom1() {
+  return readFile("../geometries/3D/boxes-3.g2");
+}
+
+static LRSplineVolume* mpigeom1(int rank) {
+  vector<LRSplineVolume*> allPatches = geom1();
+  return allPatches[rank]->copy();
+}
+
+static void fix1(vector<LRSplineVolume*> &lr) {
+  bool change = true;
+  while(change) {
+    change = false;
+    // match patch 0 to patch 1
+    vector<Meshline*> knots1 = lr[0]->getEdgeKnots(EAST, true);
+    vector<Meshline*> knots2 = lr[1]->getEdgeKnots(WEST, true);
+    change |= lr[0]->matchParametricEdge(EAST, knots2, true);
+    change |= lr[1]->matchParametricEdge(WEST, knots1, true);
+
+    // match patch 1 to patch 2
+    vector<Meshline*> knots3 = lr[0]->getEdgeKnots(TOP,    true);
+    vector<Meshline*> knots4 = lr[2]->getEdgeKnots(BOTTOM, true);
+    change |= lr[0]->matchParametricEdge(TOP,    knots4, true);
+    change |= lr[2]->matchParametricEdge(BOTTOM, knots3, true);
+  }
+}
+
+static void mpifix1(int rank, LRSplineVolume* lr) {
+#ifdef HAVE_MPI
+#endif
+}
+
+static int check1(const vector<LRSplineVolume*> &lr) {
+  for(auto l : lr)
+    if(! check_isotropic_refinement(l) )
+      return 1;
+  return 0;
+}
+
+/***************** Case 2: Disc stair  *******************
+ *
+ * z-axis
+ *          +--------+
+ * ^        |        |
+ * |        |   #3   |  (extruded in r=(1,2))
+ * |        |        |
+ * +--------+--------+
+ * |        |        |
+ * |   #1   |   #2   |
+ * |        |        |
+ * +--------+--------+--> theta-axis
+ *
+ *********************************************************/
+
+static vector<LRSplineVolume*> geom2() {
+  return readFile("../geometries/3D/disc-stair-3.g2");
+}
+
+static LRSplineVolume* mpigeom2(int rank) {
+  vector<LRSplineVolume*> allPatches = geom2();
+  return allPatches[rank]->copy();
+}
+
+static void fix2(vector<LRSplineVolume*> &lr) {
+}
+
+static void mpifix2(int rank, LRSplineVolume* lr) {
+#ifdef HAVE_MPI
+#endif
+}
+
+static int check2(const vector<LRSplineVolume*> &lr) {
+  for(auto l : lr)
+    if(! check_isotropic_refinement(l) )
+      return 1;
+  return 1;
+}
+
+/***************** Main method  ***************************
+ *
+ * The real program starts here....
+ *
+ **********************************************************/
+
+int main(int argc, char **argv) {
+  if (argc < 4) {
+    std::cerr << "File usage: " << argv[0] << "<geometry> <refinement> <iterations>" << std::endl;
+    std::cerr << "  geometry: " << std::endl;
+    std::cerr << "    1 = L-shape, 3 patches" << std::endl;
+    std::cerr << "    2 = Disc-stair, 3 patches" << std::endl;
+    std::cerr << "  refinement: " << std::endl;
+    std::cerr << "    1 = All corners on first patch" << std::endl;
+    std::cerr << "    2 = One random function on each patch (chosen independently)" << std::endl;
+    std::cerr << "    3 = South-East-Bottom corner on first patch" << std::endl;
+    std::cerr << "  iterations: (int) number of refinement that is to be performed" << std::endl;
+    return 1;
+  }
+  int result = 0;
+
+  vector<LRSplineVolume*> model;
+  int geometry   = atoi(argv[1]);
+  int refinement = atoi(argv[2]);
+  int iterations = atoi(argv[3]);
+  int               patches[]= {      0,        3,        3};
+  geom_function     geom[]   = {nullptr,    geom1,    geom2};
+  mpigeom_function  mpigeom[]= {nullptr, mpigeom1, mpigeom2};
+  check_function    check[]  = {nullptr,   check1,   check2};
+  fix_function      fix[]    = {nullptr,     fix1,     fix2};
+  mpifix_function   mpifix[] = {nullptr,  mpifix1,  mpifix2};
+  refine_function   refine[] = {nullptr,  refine1,  refine2,  refine3};
+  mpiref_function   mpiref[] = {nullptr,  mpiref1,  mpiref2,  mpiref3};
+
+#ifdef HAVE_MPI
+  MPI_Init(&argc, &argv);
+  int rank;
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+  cout << rank << ": Initialized" << endl;
+  if(rank >= patches[geometry]) {
+    MPI_Finalize();
+    return 0;
+  }
+
+  LRSplineVolume *patch = mpigeom[geometry](rank);
+  cout << rank << ": " << "Read geometry" << endl;
+  for(int i=0; i<iterations; i++) {
+    mpiref[refinement](rank, patch);
+    cout << rank << ": " << "Did refinement" << endl;
+    mpifix[geometry](  rank, patch);
+    cout << rank << ": " << "Fixed refinement" << endl;
+
+    patch->generateIDs(); // indexing is reset after refinement
+  }
+  model = collectPatches(rank, patches[geometry], patch);
+  cout << rank << ": " << "Collected patches" << endl;
+
+  if(rank == 0)
+    result = check[geometry](model);
+  else
+    result = 0;
+  MPI_Finalize();
+
+#else
+  model = geom[geometry]();
+
+  for(int i=0; i<iterations; i++) {
+    refine[refinement](model);
+    fix[geometry](    model);
+
+    for(auto lr : model)
+      lr->generateIDs(); // indexing is reset after refinement
+  }
+  result = check[geometry](model);
+#endif
+
+  // print results to file for manual debugging
+  writeFile("mesh.lr", model);
+  return result;
+}
