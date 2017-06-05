@@ -5,12 +5,15 @@
 #include <cmath>
 #include <algorithm>
 #include "LRSpline/LRSplineVolume.h"
+#include "LRSpline/Meshline.h"
 #include "GoTools/trivariate/SplineVolume.h"
 #include "GoTools/geometry/ObjectHeader.h"
 
 #ifdef HAVE_MPI
 #include <mpi.h>
 #endif
+
+#define DOUBLE_TOL 1e-5
 
 using namespace std;
 using namespace LR;
@@ -66,6 +69,31 @@ void writeFile(const string &filename, vector<LRSplineVolume*> model) {
  * is indeed matching.
  *
  *********************************************************/
+
+// check that all meshlines from a are contained in b (call this twice and 
+// swap the roles of a & b when testing for assertions). Note: boundary meshlines
+// may not equally match from both sides (multiplicites and overlaps on lines may occur)
+// and this is the reason we need to see if all lines from one side is contained
+// in the lines from the other side
+static bool check_contained_in(const vector<Meshline*> a, const vector<Meshline*> b) {
+  for(auto l1 : a) {
+    bool found = false;
+    for(auto l2 : b) {
+      if(l1->is_spanning_u() == l2->is_spanning_u()) {
+        if(fabs(l1->const_par_ - l2->const_par_) < DOUBLE_TOL && 
+           l1->start_ >= l2->start_ &&
+           l1->stop_  <= l2->stop_) {
+          found = true;
+          break;
+        }
+      }
+    }
+    if(!found)
+      return false;
+  }
+
+  return true;
+}
 
 // check that all elements continue to be perfect squares (isotropic / basis-function refinement)
 static bool check_isotropic_refinement(LRSplineVolume *lr) {
@@ -169,6 +197,7 @@ static void fix1(vector<LRSplineVolume*> &lr) {
     // match patch 0 to patch 1
     vector<Meshline*> knots1 = lr[0]->getEdgeKnots(EAST, true);
     vector<Meshline*> knots2 = lr[1]->getEdgeKnots(WEST, true);
+    for(Meshline* m : knots1) cout << *m << endl;
     change |= lr[0]->matchParametricEdge(EAST, knots2, true);
     change |= lr[1]->matchParametricEdge(WEST, knots1, true);
 
@@ -186,6 +215,17 @@ static void mpifix1(int rank, LRSplineVolume* lr) {
 }
 
 static int check1(const vector<LRSplineVolume*> &lr) {
+  cout << "Testing testing..." << endl;
+  vector<Meshline*> knots1 = lr[0]->getEdgeKnots(EAST, true);
+  vector<Meshline*> knots2 = lr[1]->getEdgeKnots(WEST, true);
+  if(!check_contained_in(knots1, knots2)) return 1;
+  if(!check_contained_in(knots2, knots1)) return 1;
+
+  vector<Meshline*> knots3 = lr[0]->getEdgeKnots(TOP,    true);
+  vector<Meshline*> knots4 = lr[2]->getEdgeKnots(BOTTOM, true);
+  if(!check_contained_in(knots3, knots4)) return 1;
+  if(!check_contained_in(knots4, knots3)) return 1;
+
   for(auto l : lr)
     if(! check_isotropic_refinement(l) )
       return 1;
@@ -239,7 +279,7 @@ static int check2(const vector<LRSplineVolume*> &lr) {
 
 int main(int argc, char **argv) {
   if (argc < 4) {
-    std::cerr << "File usage: " << argv[0] << "<geometry> <refinement> <iterations>" << std::endl;
+    std::cerr << "File usage: " << argv[0] << " <geometry> <refinement> <iterations>" << std::endl;
     std::cerr << "  geometry: " << std::endl;
     std::cerr << "    1 = L-shape, 3 patches" << std::endl;
     std::cerr << "    2 = Disc-stair, 3 patches" << std::endl;
