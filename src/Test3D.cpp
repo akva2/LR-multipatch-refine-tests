@@ -32,6 +32,103 @@ typedef void            (*mpiref_function)( int, LRSplineVolume*);
 typedef void            (*mpifix_function)( int, LRSplineVolume*);
 typedef LRSplineVolume* (*mpigeom_function)(int);
 
+/***************** MPI  methods ***************************
+ *
+ * Specialized functions only needed in the MPI runs
+ *
+ **********************************************************/
+
+#ifdef HAVE_MPI
+
+static void reverse_u(const vector<Meshline*>& knots);
+static void reverse_v(const vector<Meshline*>& knots);
+static void flip_uv(  const vector<Meshline*>& knots);
+
+vector<LRSplineVolume*> collectPatches(int rank, int numProc, LRSplineVolume* patch) {
+  vector<LRSplineVolume*> result;
+  if(rank == 0) {
+    result.push_back(patch);
+    for(int i=1; i<numProc; i++) {
+      int source = i;
+      int tag    = i;
+      int size;
+      MPI_Recv(&size,      1,    MPI_INT,  source, tag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      char serialized[size];
+      MPI_Recv(serialized, size, MPI_CHAR, source, tag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      string str(serialized);
+      result.push_back(new LRSplineVolume());
+      stringstream(str) >> *result.back();
+    }
+  } else {
+    stringstream ss;
+    ss << *patch;
+    string serialized = ss.str();
+    int size = serialized.size() + 1; // sending this as char-array so end with a terminating 0
+
+    int dest = 0;
+    int tag  = rank;
+    MPI_Send(&size,                 1, MPI_INT,  dest, tag, MPI_COMM_WORLD);
+    MPI_Send(serialized.c_str(), size, MPI_CHAR, dest, tag, MPI_COMM_WORLD);
+  }
+  return result;
+}
+
+void sendLines(int rank, int tag, const LRSplineVolume* lr, parameterEdge edg, int orient=0) {
+  // fetch local knots
+  vector<Meshline*> knots = lr->getEdgeKnots(edg, true);
+  // orient if needed
+  if(orient & 1)
+    reverse_v(knots);
+  if(orient & 2)
+    reverse_u(knots);
+  if(orient & 4)
+    flip_uv(knots);
+  // wrap in simple containers
+  int size = knots.size();
+  vector<double> constPar, start, stop;
+  vector<int>    mult, span_u;
+  for(auto m : knots) {
+    span_u.push_back(  m->span_u_line_);
+    constPar.push_back(m->const_par_);
+    start.push_back(   m->start_);
+    stop.push_back(    m->stop_);
+    mult.push_back(    m->multiplicity_);
+  }
+  // send it all across the network
+  MPI_Send(&size,              1, MPI_INT,    rank, tag++, MPI_COMM_WORLD);
+  MPI_Send(span_u.data(),   size, MPI_INT,    rank, tag++, MPI_COMM_WORLD);
+  MPI_Send(constPar.data(), size, MPI_DOUBLE, rank, tag++, MPI_COMM_WORLD);
+  MPI_Send(start.data(),    size, MPI_DOUBLE, rank, tag++, MPI_COMM_WORLD);
+  MPI_Send(stop.data(),     size, MPI_DOUBLE, rank, tag++, MPI_COMM_WORLD);
+  MPI_Send(mult.data(),     size, MPI_INT,    rank, tag++, MPI_COMM_WORLD);
+
+  // clean up
+  for(auto m : knots)
+    delete m;
+}
+
+vector<Meshline*> recvLines(int rank, int tag) {
+  // fetch number of meshlines
+  int size;
+  MPI_Recv(&size, 1, MPI_INT,    rank, tag++, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+  
+  vector<double> constPar(size), start(size), stop(size);
+  vector<int>    mult(size), span_u(size);
+  vector<Meshline*> results;
+
+  // send it all across the network
+  MPI_Recv(span_u.data(),   size, MPI_INT,    rank, tag++, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+  MPI_Recv(constPar.data(), size, MPI_DOUBLE, rank, tag++, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+  MPI_Recv(start.data(),    size, MPI_DOUBLE, rank, tag++, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+  MPI_Recv(stop.data(),     size, MPI_DOUBLE, rank, tag++, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+  MPI_Recv(mult.data(),     size, MPI_INT,    rank, tag++, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+  for(int i=0; i<size; i++)
+    results.push_back(new Meshline(span_u[i], constPar[i], start[i], stop[i], mult[i]));
+  return results;
+    
+}
+#endif
+
 // read multipatch g2 file and return LRSplineVolume representation of all patches
 vector<LRSplineVolume*> readFile(const string &filename) {
   vector<LRSplineVolume*> results;
@@ -189,7 +286,7 @@ static void refine3(const vector<LRSplineVolume*>& model) {
   vector<Basisfunction*> oneFunction;
   vector<int> corner_idx;
   // fetch index of all 4 corners
-  model[0]->getEdgeFunctions(oneFunction, (parameterEdge) SOUTH|WEST|BOTTOM);
+  model[0]->getEdgeFunctions(oneFunction, (parameterEdge) SOUTH|WEST|TOP);
   corner_idx.push_back(oneFunction[0]->getId());
   // do the actual refinement
   model[0]->refineBasisFunction(corner_idx);
@@ -245,6 +342,49 @@ static void fix1(vector<LRSplineVolume*> &lr) {
 
 static void mpifix1(int rank, LRSplineVolume* lr) {
 #ifdef HAVE_MPI
+  int change = 1;
+  while(change) {
+    change = 0;
+    int others_change = 0;
+  
+    if(rank == 0) {
+      sendLines(1, 1, lr, EAST, 0);
+      sendLines(2, 1, lr, TOP,  0);
+      vector<Meshline*> knots1 = recvLines(1, 1);
+      vector<Meshline*> knots2 = recvLines(2, 1);
+      change |= lr->matchParametricEdge(EAST, knots1, true);
+      change |= lr->matchParametricEdge(TOP,  knots2, true);
+      
+      MPI_Send(&change,        1, MPI_INT,  1, 10, MPI_COMM_WORLD);
+      MPI_Send(&change,        1, MPI_INT,  2, 10, MPI_COMM_WORLD);
+      MPI_Recv(&others_change, 1, MPI_INT,  1, 10, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      change |= others_change;
+      MPI_Recv(&others_change, 1, MPI_INT,  2, 10, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      change |= others_change;
+    } else if(rank == 1) {
+      vector<Meshline*> knots = recvLines(0, 1);
+      sendLines(0, 1, lr, WEST, 0);
+      change |= lr->matchParametricEdge(WEST, knots, true);
+
+      MPI_Recv(&others_change, 1, MPI_INT,  0, 10, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      change |= others_change;
+      MPI_Send(&change,        1, MPI_INT,  0, 10, MPI_COMM_WORLD);
+      MPI_Send(&change,        1, MPI_INT,  2, 10, MPI_COMM_WORLD);
+      MPI_Recv(&others_change, 1, MPI_INT,  2, 10, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      change |= others_change;
+    } else if(rank == 2) {
+      vector<Meshline*> knots = recvLines(0, 1);
+      sendLines(0, 1, lr, BOTTOM, 0);
+      change |= lr->matchParametricEdge(BOTTOM, knots, true);
+
+      MPI_Recv(&others_change, 1, MPI_INT,  0, 10, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      change |= others_change;
+      MPI_Recv(&others_change, 1, MPI_INT,  1, 10, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      change |= others_change;
+      MPI_Send(&change,        1, MPI_INT,  0, 10, MPI_COMM_WORLD);
+      MPI_Send(&change,        1, MPI_INT,  1, 10, MPI_COMM_WORLD);
+    }
+  }
 #endif
 }
 
@@ -309,6 +449,49 @@ static void fix2(vector<LRSplineVolume*> &lr) {
 
 static void mpifix2(int rank, LRSplineVolume* lr) {
 #ifdef HAVE_MPI
+  int change = 1;
+  while(change) {
+    change = 0;
+    int others_change = 0;
+  
+    if(rank == 0) {
+      sendLines(1, 1, lr, NORTH, 0);
+      vector<Meshline*> knots = recvLines(1, 1);
+      change |= lr->matchParametricEdge(NORTH, knots, true);
+      
+      MPI_Send(&change,        1, MPI_INT,  1, 10, MPI_COMM_WORLD);
+      MPI_Send(&change,        1, MPI_INT,  2, 10, MPI_COMM_WORLD);
+      MPI_Recv(&others_change, 1, MPI_INT,  1, 10, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      change |= others_change;
+      MPI_Recv(&others_change, 1, MPI_INT,  2, 10, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      change |= others_change;
+    } else if(rank == 1) {
+      vector<Meshline*> knots1 = recvLines(0, 1);
+      vector<Meshline*> knots2 = recvLines(2, 1);
+      sendLines(0, 1, lr, SOUTH, 0);
+      sendLines(2, 1, lr, TOP,   0);
+      change |= lr->matchParametricEdge(SOUTH, knots1, true);
+      change |= lr->matchParametricEdge(TOP,   knots2, true);
+
+      MPI_Recv(&others_change, 1, MPI_INT,  0, 10, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      change |= others_change;
+      MPI_Send(&change,        1, MPI_INT,  0, 10, MPI_COMM_WORLD);
+      MPI_Send(&change,        1, MPI_INT,  2, 10, MPI_COMM_WORLD);
+      MPI_Recv(&others_change, 1, MPI_INT,  2, 10, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      change |= others_change;
+    } else if(rank == 2) {
+      sendLines(1, 1, lr, BOTTOM, 0);
+      vector<Meshline*> knots = recvLines(1, 1);
+      change |= lr->matchParametricEdge(BOTTOM, knots, true);
+
+      MPI_Recv(&others_change, 1, MPI_INT,  0, 10, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      change |= others_change;
+      MPI_Recv(&others_change, 1, MPI_INT,  1, 10, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      change |= others_change;
+      MPI_Send(&change,        1, MPI_INT,  0, 10, MPI_COMM_WORLD);
+      MPI_Send(&change,        1, MPI_INT,  1, 10, MPI_COMM_WORLD);
+    }
+  }
 #endif
 }
 
@@ -369,6 +552,29 @@ static void fix3(vector<LRSplineVolume*> &lr) {
 
 static void mpifix3(int rank, LRSplineVolume* lr) {
 #ifdef HAVE_MPI
+  int change = 1;
+  while(change) {
+    change = 0;
+    int others_change = 0;
+  
+    if(rank == 0) {
+      sendLines(1, 1, lr, WEST, 1);
+      vector<Meshline*> knots = recvLines(1, 1);
+      change |= lr->matchParametricEdge(WEST, knots, true);
+      
+      MPI_Send(&change,        1, MPI_INT,  1, 10, MPI_COMM_WORLD);
+      MPI_Recv(&others_change, 1, MPI_INT,  1, 10, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      change |= others_change;
+    } else if(rank == 1) {
+      vector<Meshline*> knots = recvLines(0, 1);
+      sendLines(0, 1, lr, BOTTOM, 1);
+      change |= lr->matchParametricEdge(BOTTOM, knots, true);
+
+      MPI_Recv(&others_change, 1, MPI_INT,  0, 10, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      change |= others_change;
+      MPI_Send(&change,        1, MPI_INT,  0, 10, MPI_COMM_WORLD);
+    }
+  }
 #endif
 }
 
@@ -425,6 +631,29 @@ static void fix4(vector<LRSplineVolume*> &lr) {
 
 static void mpifix4(int rank, LRSplineVolume* lr) {
 #ifdef HAVE_MPI
+  int change = 1;
+  while(change) {
+    change = 0;
+    int others_change = 0;
+  
+    if(rank == 0) {
+      sendLines(1, 1, lr, WEST, 2);
+      vector<Meshline*> knots = recvLines(1, 1);
+      change |= lr->matchParametricEdge(WEST, knots, true);
+      
+      MPI_Send(&change,        1, MPI_INT,  1, 10, MPI_COMM_WORLD);
+      MPI_Recv(&others_change, 1, MPI_INT,  1, 10, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      change |= others_change;
+    } else if(rank == 1) {
+      vector<Meshline*> knots = recvLines(0, 1);
+      sendLines(0, 1, lr, BOTTOM, 2);
+      change |= lr->matchParametricEdge(BOTTOM, knots, true);
+
+      MPI_Recv(&others_change, 1, MPI_INT,  0, 10, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      change |= others_change;
+      MPI_Send(&change,        1, MPI_INT,  0, 10, MPI_COMM_WORLD);
+    }
+  }
 #endif
 }
 
@@ -481,6 +710,29 @@ static void fix5(vector<LRSplineVolume*> &lr) {
 
 static void mpifix5(int rank, LRSplineVolume* lr) {
 #ifdef HAVE_MPI
+  int change = 1;
+  while(change) {
+    change = 0;
+    int others_change = 0;
+  
+    if(rank == 0) {
+      sendLines(1, 1, lr, WEST, 4);
+      vector<Meshline*> knots = recvLines(1, 1);
+      change |= lr->matchParametricEdge(WEST, knots, true);
+      
+      MPI_Send(&change,        1, MPI_INT,  1, 10, MPI_COMM_WORLD);
+      MPI_Recv(&others_change, 1, MPI_INT,  1, 10, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      change |= others_change;
+    } else if(rank == 1) {
+      vector<Meshline*> knots = recvLines(0, 1);
+      sendLines(0, 1, lr, WEST, 4);
+      change |= lr->matchParametricEdge(WEST, knots, true);
+
+      MPI_Recv(&others_change, 1, MPI_INT,  0, 10, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      change |= others_change;
+      MPI_Send(&change,        1, MPI_INT,  0, 10, MPI_COMM_WORLD);
+    }
+  }
 #endif
 }
 
@@ -539,6 +791,29 @@ static void fix6(vector<LRSplineVolume*> &lr) {
 
 static void mpifix6(int rank, LRSplineVolume* lr) {
 #ifdef HAVE_MPI
+  int change = 1;
+  while(change) {
+    change = 0;
+    int others_change = 0;
+  
+    if(rank == 0) {
+      sendLines(1, 1, lr, WEST, 6);
+      vector<Meshline*> knots = recvLines(1, 1);
+      change |= lr->matchParametricEdge(WEST, knots, true);
+      
+      MPI_Send(&change,        1, MPI_INT,  1, 10, MPI_COMM_WORLD);
+      MPI_Recv(&others_change, 1, MPI_INT,  1, 10, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      change |= others_change;
+    } else if(rank == 1) {
+      vector<Meshline*> knots = recvLines(0, 1);
+      sendLines(0, 1, lr, TOP, 6);
+      change |= lr->matchParametricEdge(TOP, knots, true);
+
+      MPI_Recv(&others_change, 1, MPI_INT,  0, 10, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      change |= others_change;
+      MPI_Send(&change,        1, MPI_INT,  0, 10, MPI_COMM_WORLD);
+    }
+  }
 #endif
 }
 
@@ -555,6 +830,7 @@ static int check6(const vector<LRSplineVolume*> &lr) {
       return 1;
   return 0;
 }
+
 
 /***************** Main method  ***************************
  *
@@ -621,6 +897,7 @@ int main(int argc, char **argv) {
     result = check[geometry](model);
   else
     result = 0;
+  cout << rank << ": " << "Closing..." << endl;
   MPI_Finalize();
 
 #else
