@@ -56,4 +56,27 @@ for v in vol:
 with G2("boxes-7.g2") as f:
   f.write(vol[1:])
 
+# 2-patch local orientations swapped
+v1 = Volume()
+v1.raise_order(2,2,2)
+v1.refine(3)
+v2 = v1.clone().rotate(np.pi/2)
+v2.swap(2,1)
+v2.swap(0,2)
+with G2("boxes-2-orient4.g2") as f:
+  f.write([v1,v2])
 
+v2.swap(2,0)
+v2.reverse(0)
+with G2("boxes-2-orient2.g2") as f:
+  f.write([v1,v2])
+
+v2.reverse(0)
+v2.reverse(1)
+with G2("boxes-2-orient1.g2") as f:
+  f.write([v1,v2])
+
+v2.swap(0,1)
+v2.reverse(2)
+with G2("boxes-2-orient6.g2") as f:
+  f.write([v1,v2])

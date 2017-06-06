@@ -63,6 +63,41 @@ void writeFile(const string &filename, vector<LRSplineVolume*> model) {
     out << *lr << endl;
 }
 
+/***************** TOPOLOGY  FUNCTIONS  ******************
+ *
+ * Fixes local orientation issues. Swaps parametric directions and reverses ranges
+ *
+ *********************************************************/
+
+static void reverse_u(const vector<Meshline*>& knots) {
+  for(auto l : knots) {
+    if(l->is_spanning_u()) {
+      double tmp = l->start_;
+      l->start_ = 1.0 - l->stop_;
+      l->stop_  = 1.0 - tmp;
+    } else {
+      l->const_par_ = 1.0 - l->const_par_;
+    }
+  }
+}
+
+static void reverse_v(const vector<Meshline*>& knots) {
+  for(auto l : knots) {
+    if(l->is_spanning_u()) {
+      l->const_par_ = 1.0 - l->const_par_;
+    } else {
+      double tmp = l->start_;
+      l->start_ = 1.0 - l->stop_;
+      l->stop_  = 1.0 - tmp;
+    }
+  }
+}
+
+static void flip_uv(const vector<Meshline*>& knots) {
+  for(auto l : knots)
+    l->span_u_line_ = !l->span_u_line_;
+}
+
 /***************** ASSERTION FUNCTIONS  ******************
  *
  * logical tests to see if the resulting multipatch model
@@ -116,7 +151,7 @@ static bool check_isotropic_refinement(LRSplineVolume *lr) {
 static void refine1(const vector<LRSplineVolume*>& model) {
   vector<Basisfunction*> oneFunction;
   vector<int> corner_idx;
-  // fetch index of all 4 corners
+  // fetch index of all 8 corners
   for(int i=0; i<2; i++) {
     for(int j=0; j<2; j++) {
       for(int k=0; k<2; k++) {
@@ -197,7 +232,6 @@ static void fix1(vector<LRSplineVolume*> &lr) {
     // match patch 0 to patch 1
     vector<Meshline*> knots1 = lr[0]->getEdgeKnots(EAST, true);
     vector<Meshline*> knots2 = lr[1]->getEdgeKnots(WEST, true);
-    for(Meshline* m : knots1) cout << *m << endl;
     change |= lr[0]->matchParametricEdge(EAST, knots2, true);
     change |= lr[1]->matchParametricEdge(WEST, knots1, true);
 
@@ -215,7 +249,6 @@ static void mpifix1(int rank, LRSplineVolume* lr) {
 }
 
 static int check1(const vector<LRSplineVolume*> &lr) {
-  cout << "Testing testing..." << endl;
   vector<Meshline*> knots1 = lr[0]->getEdgeKnots(EAST, true);
   vector<Meshline*> knots2 = lr[1]->getEdgeKnots(WEST, true);
   if(!check_contained_in(knots1, knots2)) return 1;
@@ -257,6 +290,21 @@ static LRSplineVolume* mpigeom2(int rank) {
 }
 
 static void fix2(vector<LRSplineVolume*> &lr) {
+  bool change = true;
+  while(change) {
+    change = false;
+    // match patch 0 to patch 1
+    vector<Meshline*> knots1 = lr[0]->getEdgeKnots(NORTH, true);
+    vector<Meshline*> knots2 = lr[1]->getEdgeKnots(SOUTH, true);
+    change |= lr[0]->matchParametricEdge(NORTH, knots2, true);
+    change |= lr[1]->matchParametricEdge(SOUTH, knots1, true);
+
+    // match patch 1 to patch 2
+    vector<Meshline*> knots3 = lr[1]->getEdgeKnots(TOP,    true);
+    vector<Meshline*> knots4 = lr[2]->getEdgeKnots(BOTTOM, true);
+    change |= lr[1]->matchParametricEdge(TOP,    knots4, true);
+    change |= lr[2]->matchParametricEdge(BOTTOM, knots3, true);
+  }
 }
 
 static void mpifix2(int rank, LRSplineVolume* lr) {
@@ -265,10 +313,247 @@ static void mpifix2(int rank, LRSplineVolume* lr) {
 }
 
 static int check2(const vector<LRSplineVolume*> &lr) {
+  vector<Meshline*> knots1 = lr[0]->getEdgeKnots(NORTH, true);
+  vector<Meshline*> knots2 = lr[1]->getEdgeKnots(SOUTH, true);
+  if(!check_contained_in(knots1, knots2)) return 1;
+  if(!check_contained_in(knots2, knots1)) return 1;
+
+  vector<Meshline*> knots3 = lr[1]->getEdgeKnots(TOP,    true);
+  vector<Meshline*> knots4 = lr[2]->getEdgeKnots(BOTTOM, true);
+  if(!check_contained_in(knots3, knots4)) return 1;
+  if(!check_contained_in(knots4, knots3)) return 1;
+
   for(auto l : lr)
     if(! check_isotropic_refinement(l) )
       return 1;
-  return 1;
+  return 0;
+}
+
+/***************** Case 3: Orient 1    *******************
+ *
+ *          z    y
+ *          ^   /                Patch 1        Patch 2
+ *    ______|__/________,         WEST           BOTTOM
+ *   /      | /        /|       +-------+     +-------+
+ *  /       |/        / |       |       |     |       |
+ * +--------+--------+  |     ^ |       |     |       | ^
+ * |        |        |  |    w| |       |     |       | |v
+ * |   #2   |   #1   | /      | +-------+     +-------+ |
+ * |        |        |/       o--->                <----o
+ * +--------+--------+--> x      v                   u
+ *
+ *********************************************************/
+
+static vector<LRSplineVolume*> geom3() {
+  return readFile("../geometries/3D/boxes-2-orient1.g2");
+}
+
+static LRSplineVolume* mpigeom3(int rank) {
+  vector<LRSplineVolume*> allPatches = geom3();
+  return allPatches[rank]->copy();
+}
+
+static void fix3(vector<LRSplineVolume*> &lr) {
+  bool change = true;
+  while(change) {
+    change = false;
+    // match patch 0 to patch 1
+    vector<Meshline*> knots1 = lr[0]->getEdgeKnots(WEST,   true);
+    vector<Meshline*> knots2 = lr[1]->getEdgeKnots(BOTTOM, true);
+    reverse_v(knots1);
+    reverse_v(knots2);
+    change |= lr[0]->matchParametricEdge(WEST,   knots2, true);
+    change |= lr[1]->matchParametricEdge(BOTTOM, knots1, true);
+  }
+}
+
+static void mpifix3(int rank, LRSplineVolume* lr) {
+#ifdef HAVE_MPI
+#endif
+}
+
+static int check3(const vector<LRSplineVolume*> &lr) {
+  vector<Meshline*> knots1 = lr[0]->getEdgeKnots(WEST,   true);
+  vector<Meshline*> knots2 = lr[1]->getEdgeKnots(BOTTOM, true);
+  reverse_v(knots2);
+  if(!check_contained_in(knots1, knots2)) return 1;
+  if(!check_contained_in(knots2, knots1)) return 1;
+
+  for(auto l : lr)
+    if(! check_isotropic_refinement(l) )
+      return 1;
+  return 0;
+}
+
+/***************** Case 4: Orient 2    *******************
+ *
+ *          z    y                              Patch 2
+ *          ^   /                Patch 1        BOTTOM
+ *    ______|__/________,         WEST      o---> u
+ *   /      | /        /|       +-------+   | +-------+
+ *  /       |/        / |       |       |  v| |       |
+ * +--------+--------+  |     ^ |       |   v |       |
+ * |        |        |  |    w| |       |     |       |
+ * |   #2   |   #1   | /      | +-------+     +-------+
+ * |        |        |/       o--->
+ * +--------+--------+--> x      v
+ *
+ *********************************************************/
+
+static vector<LRSplineVolume*> geom4() {
+  return readFile("../geometries/3D/boxes-2-orient2.g2");
+}
+
+static LRSplineVolume* mpigeom4(int rank) {
+  vector<LRSplineVolume*> allPatches = geom4();
+  return allPatches[rank]->copy();
+}
+
+static void fix4(vector<LRSplineVolume*> &lr) {
+  bool change = true;
+  while(change) {
+    change = false;
+    // match patch 0 to patch 1
+    vector<Meshline*> knots1 = lr[0]->getEdgeKnots(WEST,   true);
+    vector<Meshline*> knots2 = lr[1]->getEdgeKnots(BOTTOM, true);
+    reverse_u(knots1);
+    reverse_u(knots2);
+    change |= lr[0]->matchParametricEdge(WEST,   knots2, true);
+    change |= lr[1]->matchParametricEdge(BOTTOM, knots1, true);
+  }
+}
+
+static void mpifix4(int rank, LRSplineVolume* lr) {
+#ifdef HAVE_MPI
+#endif
+}
+
+static int check4(const vector<LRSplineVolume*> &lr) {
+  vector<Meshline*> knots1 = lr[0]->getEdgeKnots(WEST,   true);
+  vector<Meshline*> knots2 = lr[1]->getEdgeKnots(BOTTOM, true);
+  reverse_u(knots2);
+  if(!check_contained_in(knots1, knots2)) return 1;
+  if(!check_contained_in(knots2, knots1)) return 1;
+
+  for(auto l : lr)
+    if(! check_isotropic_refinement(l) )
+      return 1;
+  return 0;
+}
+
+/***************** Case 5: Orient 4    *******************
+ *
+ *          z    y
+ *          ^   /                Patch 1        Patch 2
+ *    ______|__/________,         WEST           WEST
+ *   /      | /        /|       +-------+     +-------+
+ *  /       |/        / |       |       |     |       |
+ * +--------+--------+  |     ^ |       |   ^ |       |
+ * |        |        |  |    w| |       |  v| |       |
+ * |   #2   |   #1   | /      | +-------+   | +-------+
+ * |        |        |/       o--->         o---->
+ * +--------+--------+--> x      v               w
+ *
+ *********************************************************/
+
+static vector<LRSplineVolume*> geom5() {
+  return readFile("../geometries/3D/boxes-2-orient4.g2");
+}
+
+static LRSplineVolume* mpigeom5(int rank) {
+  vector<LRSplineVolume*> allPatches = geom5();
+  return allPatches[rank]->copy();
+}
+
+static void fix5(vector<LRSplineVolume*> &lr) {
+  bool change = true;
+  while(change) {
+    change = false;
+    // match patch 0 to patch 1
+    vector<Meshline*> knots1 = lr[0]->getEdgeKnots(WEST, true);
+    vector<Meshline*> knots2 = lr[1]->getEdgeKnots(WEST, true);
+    flip_uv(knots1);
+    flip_uv(knots2);
+    change |= lr[0]->matchParametricEdge(WEST, knots2, true);
+    change |= lr[1]->matchParametricEdge(WEST, knots1, true);
+  }
+}
+
+static void mpifix5(int rank, LRSplineVolume* lr) {
+#ifdef HAVE_MPI
+#endif
+}
+
+static int check5(const vector<LRSplineVolume*> &lr) {
+  vector<Meshline*> knots1 = lr[0]->getEdgeKnots(WEST, true);
+  vector<Meshline*> knots2 = lr[1]->getEdgeKnots(WEST, true);
+  flip_uv(knots2);
+  if(!check_contained_in(knots1, knots2)) return 1;
+  if(!check_contained_in(knots2, knots1)) return 1;
+
+  for(auto l : lr)
+    if(! check_isotropic_refinement(l) )
+      return 1;
+  return 0;
+}
+
+/***************** Case 6: Orient 6    *******************
+ *
+ *          z    y                              Patch 2
+ *          ^   /                Patch 1         TOP
+ *    ______|__/________,         WEST      o---> v
+ *   /      | /        /|       +-------+   | +-------+
+ *  /       |/        / |       |       |  u| |       |
+ * +--------+--------+  |     ^ |       |   v |       |
+ * |        |        |  |    w| |       |     |       |
+ * |   #2   |   #1   | /      | +-------+     +-------+
+ * |        |        |/       o--->
+ * +--------+--------+--> x      v
+ *
+ *********************************************************/
+
+static vector<LRSplineVolume*> geom6() {
+  return readFile("../geometries/3D/boxes-2-orient6.g2");
+}
+
+static LRSplineVolume* mpigeom6(int rank) {
+  vector<LRSplineVolume*> allPatches = geom6();
+  return allPatches[rank]->copy();
+}
+
+static void fix6(vector<LRSplineVolume*> &lr) {
+  bool change = true;
+  while(change) {
+    change = false;
+    // match patch 0 to patch 1
+    vector<Meshline*> knots1 = lr[0]->getEdgeKnots(WEST, true);
+    vector<Meshline*> knots2 = lr[1]->getEdgeKnots(TOP, true);
+    reverse_u(knots1);
+    flip_uv(knots1);
+    reverse_u(knots2);
+    flip_uv(knots2);
+    change |= lr[0]->matchParametricEdge(WEST, knots2, true);
+    change |= lr[1]->matchParametricEdge(TOP,  knots1, true);
+  }
+}
+
+static void mpifix6(int rank, LRSplineVolume* lr) {
+#ifdef HAVE_MPI
+#endif
+}
+
+static int check6(const vector<LRSplineVolume*> &lr) {
+  vector<Meshline*> knots1 = lr[0]->getEdgeKnots(WEST, true);
+  vector<Meshline*> knots2 = lr[1]->getEdgeKnots(TOP, true);
+  reverse_u(knots2);
+  flip_uv(knots2);
+  if(!check_contained_in(knots1, knots2)) return 1;
+  if(!check_contained_in(knots2, knots1)) return 1;
+
+  for(auto l : lr)
+    if(! check_isotropic_refinement(l) )
+      return 1;
+  return 0;
 }
 
 /***************** Main method  ***************************
@@ -283,6 +568,10 @@ int main(int argc, char **argv) {
     std::cerr << "  geometry: " << std::endl;
     std::cerr << "    1 = L-shape, 3 patches" << std::endl;
     std::cerr << "    2 = Disc-stair, 3 patches" << std::endl;
+    std::cerr << "    3 = Orientation=1, 2 patches" << std::endl;
+    std::cerr << "    4 = Orientation=2, 2 patches" << std::endl;
+    std::cerr << "    5 = Orientation=4, 2 patches" << std::endl;
+    std::cerr << "    6 = Orientation=6, 2 patches" << std::endl;
     std::cerr << "  refinement: " << std::endl;
     std::cerr << "    1 = All corners on first patch" << std::endl;
     std::cerr << "    2 = One random function on each patch (chosen independently)" << std::endl;
@@ -296,12 +585,12 @@ int main(int argc, char **argv) {
   int geometry   = atoi(argv[1]);
   int refinement = atoi(argv[2]);
   int iterations = atoi(argv[3]);
-  int               patches[]= {      0,        3,        3};
-  geom_function     geom[]   = {nullptr,    geom1,    geom2};
-  mpigeom_function  mpigeom[]= {nullptr, mpigeom1, mpigeom2};
-  check_function    check[]  = {nullptr,   check1,   check2};
-  fix_function      fix[]    = {nullptr,     fix1,     fix2};
-  mpifix_function   mpifix[] = {nullptr,  mpifix1,  mpifix2};
+  int               patches[]= {      0,        3,        3,        2,        2,        2,        2};
+  geom_function     geom[]   = {nullptr,    geom1,    geom2,    geom3,    geom4,    geom5,    geom6};
+  mpigeom_function  mpigeom[]= {nullptr, mpigeom1, mpigeom2, mpigeom3, mpigeom4, mpigeom5, mpigeom6};
+  check_function    check[]  = {nullptr,   check1,   check2,   check3,   check4,   check5,   check6};
+  fix_function      fix[]    = {nullptr,     fix1,     fix2,     fix3,     fix4,     fix5,     fix6};
+  mpifix_function   mpifix[] = {nullptr,  mpifix1,  mpifix2,  mpifix3,  mpifix4,  mpifix5,  mpifix6};
   refine_function   refine[] = {nullptr,  refine1,  refine2,  refine3};
   mpiref_function   mpiref[] = {nullptr,  mpiref1,  mpiref2,  mpiref3};
 
