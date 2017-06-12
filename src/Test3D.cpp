@@ -111,7 +111,7 @@ vector<Meshline*> recvLines(int rank, int tag) {
   // fetch number of meshlines
   int size;
   MPI_Recv(&size, 1, MPI_INT,    rank, tag++, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-  
+
   vector<double> constPar(size), start(size), stop(size);
   vector<int>    mult(size), span_u(size);
   vector<Meshline*> results;
@@ -125,7 +125,7 @@ vector<Meshline*> recvLines(int rank, int tag) {
   for(int i=0; i<size; i++)
     results.push_back(new Meshline(span_u[i], constPar[i], start[i], stop[i], mult[i]));
   return results;
-    
+
 }
 #endif
 
@@ -202,7 +202,7 @@ static void flip_uv(const vector<Meshline*>& knots) {
  *
  *********************************************************/
 
-// check that all meshlines from a are contained in b (call this twice and 
+// check that all meshlines from a are contained in b (call this twice and
 // swap the roles of a & b when testing for assertions). Note: boundary meshlines
 // may not equally match from both sides (multiplicites and overlaps on lines may occur)
 // and this is the reason we need to see if all lines from one side is contained
@@ -212,7 +212,7 @@ static bool check_contained_in(const vector<Meshline*> a, const vector<Meshline*
     bool found = false;
     for(auto l2 : b) {
       if(l1->is_spanning_u() == l2->is_spanning_u()) {
-        if(fabs(l1->const_par_ - l2->const_par_) < DOUBLE_TOL && 
+        if(fabs(l1->const_par_ - l2->const_par_) < DOUBLE_TOL &&
            l1->start_ >= l2->start_ &&
            l1->stop_  <= l2->stop_) {
           found = true;
@@ -346,7 +346,7 @@ static void mpifix1(int rank, LRSplineVolume* lr) {
   while(change) {
     change = 0;
     int others_change = 0;
-  
+
     if(rank == 0) {
       sendLines(1, 1, lr, EAST, 0);
       sendLines(2, 1, lr, TOP,  0);
@@ -354,7 +354,7 @@ static void mpifix1(int rank, LRSplineVolume* lr) {
       vector<Meshline*> knots2 = recvLines(2, 1);
       change |= lr->matchParametricEdge(EAST, knots1, true);
       change |= lr->matchParametricEdge(TOP,  knots2, true);
-      
+
       MPI_Send(&change,        1, MPI_INT,  1, 10, MPI_COMM_WORLD);
       MPI_Send(&change,        1, MPI_INT,  2, 10, MPI_COMM_WORLD);
       MPI_Recv(&others_change, 1, MPI_INT,  1, 10, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
@@ -453,12 +453,12 @@ static void mpifix2(int rank, LRSplineVolume* lr) {
   while(change) {
     change = 0;
     int others_change = 0;
-  
+
     if(rank == 0) {
       sendLines(1, 1, lr, NORTH, 0);
       vector<Meshline*> knots = recvLines(1, 1);
       change |= lr->matchParametricEdge(NORTH, knots, true);
-      
+
       MPI_Send(&change,        1, MPI_INT,  1, 10, MPI_COMM_WORLD);
       MPI_Send(&change,        1, MPI_INT,  2, 10, MPI_COMM_WORLD);
       MPI_Recv(&others_change, 1, MPI_INT,  1, 10, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
@@ -556,12 +556,12 @@ static void mpifix3(int rank, LRSplineVolume* lr) {
   while(change) {
     change = 0;
     int others_change = 0;
-  
+
     if(rank == 0) {
       sendLines(1, 1, lr, WEST, 1);
       vector<Meshline*> knots = recvLines(1, 1);
       change |= lr->matchParametricEdge(WEST, knots, true);
-      
+
       MPI_Send(&change,        1, MPI_INT,  1, 10, MPI_COMM_WORLD);
       MPI_Recv(&others_change, 1, MPI_INT,  1, 10, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
       change |= others_change;
@@ -635,12 +635,12 @@ static void mpifix4(int rank, LRSplineVolume* lr) {
   while(change) {
     change = 0;
     int others_change = 0;
-  
+
     if(rank == 0) {
       sendLines(1, 1, lr, WEST, 2);
       vector<Meshline*> knots = recvLines(1, 1);
       change |= lr->matchParametricEdge(WEST, knots, true);
-      
+
       MPI_Send(&change,        1, MPI_INT,  1, 10, MPI_COMM_WORLD);
       MPI_Recv(&others_change, 1, MPI_INT,  1, 10, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
       change |= others_change;
@@ -714,12 +714,12 @@ static void mpifix5(int rank, LRSplineVolume* lr) {
   while(change) {
     change = 0;
     int others_change = 0;
-  
+
     if(rank == 0) {
       sendLines(1, 1, lr, WEST, 4);
       vector<Meshline*> knots = recvLines(1, 1);
       change |= lr->matchParametricEdge(WEST, knots, true);
-      
+
       MPI_Send(&change,        1, MPI_INT,  1, 10, MPI_COMM_WORLD);
       MPI_Recv(&others_change, 1, MPI_INT,  1, 10, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
       change |= others_change;
@@ -795,12 +795,12 @@ static void mpifix6(int rank, LRSplineVolume* lr) {
   while(change) {
     change = 0;
     int others_change = 0;
-  
+
     if(rank == 0) {
       sendLines(1, 1, lr, WEST, 6);
       vector<Meshline*> knots = recvLines(1, 1);
       change |= lr->matchParametricEdge(WEST, knots, true);
-      
+
       MPI_Send(&change,        1, MPI_INT,  1, 10, MPI_COMM_WORLD);
       MPI_Recv(&others_change, 1, MPI_INT,  1, 10, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
       change |= others_change;
