@@ -25,10 +25,9 @@ with G2("star.g2") as f:
 s1 = sf.square()
 s2 = s1 + [1,0]
 s3 = s2 - [0,1]
-s3.raise_order(0,1) # !!! Different polynomial order for this patch
 lshape = [s1,s2,s3]
 for surf in lshape:
-  surf.refine(5,5)
+  surf.refine(7,7)
 with G2("lshape.g2") as f:
     f.write(lshape)
 

@@ -182,17 +182,23 @@ static LRSplineSurface* mpigeom2(int rank) {
 }
 
 static void fix2(vector<LRSplineSurface*> &lr) {
-  // match patch 0 to patch 1
-  vector<double> knots1 = lr[0]->getEdgeKnots(EAST, true);
-  vector<double> knots2 = lr[1]->getEdgeKnots(WEST, true);
-  lr[0]->matchParametricEdge(EAST, knots2, true);
-  lr[1]->matchParametricEdge(WEST, knots1, true);
+  vector<Meshline*> newlines;
+  bool change = true;
+  while(change) {
+    change = false;
+    // match patch 0 to patch 1
+    change |= lr[0]->matchParametricEdge(EAST, lr[1], WEST, false);
 
-  // match patch 1 to patch 2
-  vector<double> knots3 = lr[1]->getEdgeKnots(SOUTH, true);
-  vector<double> knots4 = lr[2]->getEdgeKnots(NORTH, true);
-  lr[1]->matchParametricEdge(SOUTH, knots4, true);
-  lr[2]->matchParametricEdge(NORTH, knots3, true);
+    // match patch 1 to patch 2
+    change |= lr[1]->matchParametricEdge(SOUTH, lr[2], NORTH, false);
+
+    // make sure all patches are isotropic still
+    for(auto l : lr) {
+      l->enforceIsotropic(&newlines);
+      change |= newlines.size()>0;
+      newlines.clear();
+    }
+  }
 }
 
 static void mpifix2(int rank, LRSplineSurface* lr) {
@@ -291,14 +297,15 @@ static LRSplineSurface* mpigeom3(int rank) {
 
 static void fix3(vector<LRSplineSurface*> &lr) {
   bool change = true;
+  vector<Meshline*> newlines;
   while(change) {
     change = false;
     for(int i=0; i<6; ++i) {
       int j = (i+1)%6;
-      vector<double> knots1 = lr[i]->getEdgeKnots(WEST,  true);
-      vector<double> knots2 = lr[j]->getEdgeKnots(SOUTH, true);
-      change |= lr[i]->matchParametricEdge(WEST,  knots2, true);
-      change |= lr[j]->matchParametricEdge(SOUTH, knots1, true);
+      change |= lr[i]->matchParametricEdge(WEST, lr[j], SOUTH, false);
+      lr[i]->enforceIsotropic(&newlines);
+      change |= newlines.size()>0;
+      newlines.clear();
     }
   }
 }
@@ -422,17 +429,18 @@ static vector<LRSplineSurface*> geom4() {
 }
 
 static void fix4(vector<LRSplineSurface*> &lr) {
+  vector<Meshline*> newlines;
   bool change = true;
   while(change) {
     change = false;
-    vector<double> knots1 = lr[0]->getEdgeKnots(EAST,  true);
-    vector<double> knots2 = lr[0]->getEdgeKnots(NORTH, true);
-    vector<double> knots3 = lr[1]->getEdgeKnots(WEST,  true);
-    vector<double> knots4 = lr[1]->getEdgeKnots(EAST,  true);
-    change |= lr[0]->matchParametricEdge(EAST,  knots3, true);
-    change |= lr[0]->matchParametricEdge(NORTH, knots4, true);
-    change |= lr[1]->matchParametricEdge(WEST,  knots1, true);
-    change |= lr[1]->matchParametricEdge(EAST,  knots2, true);
+    change |= lr[0]->matchParametricEdge(EAST,  lr[1], WEST, false);
+    change |= lr[0]->matchParametricEdge(NORTH, lr[1], EAST, false);
+    // make sure all patches are isotropic still
+    for(auto l : lr) {
+      l->enforceIsotropic(&newlines);
+      change |= newlines.size()>0;
+      newlines.clear();
+    }
   }
 }
 

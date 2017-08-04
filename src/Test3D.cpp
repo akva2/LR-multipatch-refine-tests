@@ -220,8 +220,10 @@ static bool check_contained_in(const vector<Meshline*> a, const vector<Meshline*
         }
       }
     }
-    if(!found)
+    if(!found) {
+      cout << "Meshes do not match at interface\n";
       return false;
+    }
   }
 
   return true;
@@ -231,8 +233,10 @@ static bool check_contained_in(const vector<Meshline*> a, const vector<Meshline*
 static bool check_isotropic_refinement(LRSplineVolume *lr) {
   for(auto el : lr->getAllElements())
     if(fabs( (el->umax() - el->umin()) - (el->vmax() - el->vmin()) ) >1e-4 ||
-       fabs( (el->umax() - el->umin()) - (el->wmax() - el->wmin()) ) >1e-4)
+       fabs( (el->umax() - el->umin()) - (el->wmax() - el->wmin()) ) >1e-4) {
+      cout << "Meshes are no longer isotropic\n";
       return false;
+    }
 
   return true;
 }
@@ -327,16 +331,11 @@ static void fix1(vector<LRSplineVolume*> &lr) {
   while(change) {
     change = false;
     // match patch 0 to patch 1
-    vector<Meshline*> knots1 = lr[0]->getEdgeKnots(EAST, true);
-    vector<Meshline*> knots2 = lr[1]->getEdgeKnots(WEST, true);
-    change |= lr[0]->matchParametricEdge(EAST, knots2, true);
-    change |= lr[1]->matchParametricEdge(WEST, knots1, true);
-
-    // match patch 1 to patch 2
-    vector<Meshline*> knots3 = lr[0]->getEdgeKnots(TOP,    true);
-    vector<Meshline*> knots4 = lr[2]->getEdgeKnots(BOTTOM, true);
-    change |= lr[0]->matchParametricEdge(TOP,    knots4, true);
-    change |= lr[2]->matchParametricEdge(BOTTOM, knots3, true);
+    change |= lr[0]->matchParametricEdge(EAST, lr[1], WEST,   false, false, false);
+    // match patch 0 to patch 2
+    change |= lr[0]->matchParametricEdge(TOP,  lr[2], BOTTOM, false, false, false);
+    for(auto l : lr)
+      change |= l->enforceIsotropic();
   }
 }
 
@@ -434,16 +433,12 @@ static void fix2(vector<LRSplineVolume*> &lr) {
   while(change) {
     change = false;
     // match patch 0 to patch 1
-    vector<Meshline*> knots1 = lr[0]->getEdgeKnots(NORTH, true);
-    vector<Meshline*> knots2 = lr[1]->getEdgeKnots(SOUTH, true);
-    change |= lr[0]->matchParametricEdge(NORTH, knots2, true);
-    change |= lr[1]->matchParametricEdge(SOUTH, knots1, true);
+    change |= lr[0]->matchParametricEdge(NORTH, lr[1], SOUTH, false, false, false);
 
     // match patch 1 to patch 2
-    vector<Meshline*> knots3 = lr[1]->getEdgeKnots(TOP,    true);
-    vector<Meshline*> knots4 = lr[2]->getEdgeKnots(BOTTOM, true);
-    change |= lr[1]->matchParametricEdge(TOP,    knots4, true);
-    change |= lr[2]->matchParametricEdge(BOTTOM, knots3, true);
+    change |= lr[1]->matchParametricEdge(TOP, lr[2], BOTTOM, false, false, false);
+    for(auto l : lr)
+      change |= l->enforceIsotropic();
   }
 }
 
@@ -514,16 +509,16 @@ static int check2(const vector<LRSplineVolume*> &lr) {
 
 /***************** Case 3: Orient 1    *******************
  *
- *          z    y
- *          ^   /                Patch 1        Patch 2
- *    ______|__/________,         WEST           BOTTOM
- *   /      | /        /|       +-------+     +-------+
- *  /       |/        / |       |       |     |       |
- * +--------+--------+  |     ^ |       |     |       | ^
- * |        |        |  |    w| |       |     |       | |v
- * |   #2   |   #1   | /      | +-------+     +-------+ |
- * |        |        |/       o--->                <----o
- * +--------+--------+--> x      v                   u
+ *          z    y                              Patch 2
+ *          ^   /                Patch 1        BOTTOM
+ *    ______|__/________,         WEST      o---> u
+ *   /      | /        /|       +-------+   | +-------+
+ *  /       |/        / |       |       |  v| |       |
+ * +--------+--------+  |     ^ |       |   v |       |
+ * |        |        |  |    w| |       |     |       |
+ * |   #2   |   #1   | /      | +-------+     +-------+
+ * |        |        |/       o--->
+ * +--------+--------+--> x      v
  *
  *********************************************************/
 
@@ -541,12 +536,9 @@ static void fix3(vector<LRSplineVolume*> &lr) {
   while(change) {
     change = false;
     // match patch 0 to patch 1
-    vector<Meshline*> knots1 = lr[0]->getEdgeKnots(WEST,   true);
-    vector<Meshline*> knots2 = lr[1]->getEdgeKnots(BOTTOM, true);
-    reverse_v(knots1);
-    reverse_v(knots2);
-    change |= lr[0]->matchParametricEdge(WEST,   knots2, true);
-    change |= lr[1]->matchParametricEdge(BOTTOM, knots1, true);
+    change |= lr[0]->matchParametricEdge(WEST, lr[1], BOTTOM, false, true, false);
+    for(auto l : lr)
+      change |= l->enforceIsotropic();
   }
 }
 
@@ -593,17 +585,16 @@ static int check3(const vector<LRSplineVolume*> &lr) {
 
 /***************** Case 4: Orient 2    *******************
  *
- *          z    y                              Patch 2
- *          ^   /                Patch 1        BOTTOM
- *    ______|__/________,         WEST      o---> u
- *   /      | /        /|       +-------+   | +-------+
- *  /       |/        / |       |       |  v| |       |
- * +--------+--------+  |     ^ |       |   v |       |
- * |        |        |  |    w| |       |     |       |
- * |   #2   |   #1   | /      | +-------+     +-------+
- * |        |        |/       o--->
- * +--------+--------+--> x      v
- *
+ *          z    y
+ *          ^   /                Patch 1        Patch 2
+ *    ______|__/________,         WEST           BOTTOM
+ *   /      | /        /|       +-------+     +-------+
+ *  /       |/        / |       |       |     |       |
+ * +--------+--------+  |     ^ |       |     |       | ^
+ * |        |        |  |    w| |       |     |       | |v
+ * |   #2   |   #1   | /      | +-------+     +-------+ |
+ * |        |        |/       o--->                <----o
+ * +--------+--------+--> x      v                   u
  *********************************************************/
 
 static vector<LRSplineVolume*> geom4() {
@@ -620,12 +611,15 @@ static void fix4(vector<LRSplineVolume*> &lr) {
   while(change) {
     change = false;
     // match patch 0 to patch 1
-    vector<Meshline*> knots1 = lr[0]->getEdgeKnots(WEST,   true);
-    vector<Meshline*> knots2 = lr[1]->getEdgeKnots(BOTTOM, true);
-    reverse_u(knots1);
-    reverse_u(knots2);
-    change |= lr[0]->matchParametricEdge(WEST,   knots2, true);
-    change |= lr[1]->matchParametricEdge(BOTTOM, knots1, true);
+    change |= lr[0]->matchParametricEdge(WEST, lr[1], BOTTOM, true, false, false);
+    // vector<Meshline*> knots1 = lr[0]->getEdgeKnots(WEST,   true);
+    // vector<Meshline*> knots2 = lr[1]->getEdgeKnots(BOTTOM, true);
+    // reverse_u(knots1);
+    // reverse_u(knots2);
+    // change |= lr[0]->matchParametricEdge(WEST,   knots2, true);
+    // change |= lr[1]->matchParametricEdge(BOTTOM, knots1, true);
+    for(auto l : lr)
+      change |= l->enforceIsotropic();
   }
 }
 
@@ -699,12 +693,9 @@ static void fix5(vector<LRSplineVolume*> &lr) {
   while(change) {
     change = false;
     // match patch 0 to patch 1
-    vector<Meshline*> knots1 = lr[0]->getEdgeKnots(WEST, true);
-    vector<Meshline*> knots2 = lr[1]->getEdgeKnots(WEST, true);
-    flip_uv(knots1);
-    flip_uv(knots2);
-    change |= lr[0]->matchParametricEdge(WEST, knots2, true);
-    change |= lr[1]->matchParametricEdge(WEST, knots1, true);
+    change |= lr[0]->matchParametricEdge(WEST, lr[1], WEST, false, false, true);
+    for(auto l : lr)
+      change |= l->enforceIsotropic();
   }
 }
 
@@ -778,14 +769,9 @@ static void fix6(vector<LRSplineVolume*> &lr) {
   while(change) {
     change = false;
     // match patch 0 to patch 1
-    vector<Meshline*> knots1 = lr[0]->getEdgeKnots(WEST, true);
-    vector<Meshline*> knots2 = lr[1]->getEdgeKnots(TOP, true);
-    reverse_u(knots1);
-    flip_uv(knots1);
-    reverse_u(knots2);
-    flip_uv(knots2);
-    change |= lr[0]->matchParametricEdge(WEST, knots2, true);
-    change |= lr[1]->matchParametricEdge(TOP,  knots1, true);
+    change |= lr[0]->matchParametricEdge(WEST, lr[1], TOP, true, false, true);
+    for(auto l : lr)
+      change |= l->enforceIsotropic();
   }
 }
 
